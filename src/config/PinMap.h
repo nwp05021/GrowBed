@@ -1,0 +1,51 @@
+
+#pragma once
+
+// DRV8825 pins (GPIO numbers on Pico)
+#ifndef PIN_STEP
+#define PIN_STEP      3
+#endif
+#ifndef PIN_DIR
+#define PIN_DIR       4
+#endif
+#ifndef PIN_ENABLE
+#define PIN_ENABLE    5
+#endif
+
+// Optional microstep pins (set to 255 if not connected)
+#ifndef PIN_MS1
+#define PIN_MS1       255
+#endif
+#ifndef PIN_MS2
+#define PIN_MS2       255
+#endif
+#ifndef PIN_MS3
+#define PIN_MS3       255
+#endif
+
+// Hall sensors (active-low): magnet close => LOW
+#ifndef PIN_HALL_LEFT
+#define PIN_HALL_LEFT  14
+#endif
+#ifndef PIN_HALL_RIGHT
+#define PIN_HALL_RIGHT 15
+#endif
+
+// EC11
+#ifndef PIN_ENC_A
+#define PIN_ENC_A      6
+#endif
+#ifndef PIN_ENC_B
+#define PIN_ENC_B      7
+#endif
+#ifndef PIN_ENC_BTN
+#define PIN_ENC_BTN    8
+#endif
+
+// OLED I2C (Pico I2C0 default pins)
+#ifndef PIN_I2C_SDA
+#define PIN_I2C_SDA    20
+#endif
+#ifndef PIN_I2C_SCL
+#define PIN_I2C_SCL    21
+#endif
