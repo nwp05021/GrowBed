@@ -36,6 +36,22 @@ struct UiViewModel {
     int32_t editMin = 0;
     int32_t editMax = 0;
     const char* editUnit = nullptr;
+
+    // fault
+    bool isFault = false;
+    uint8_t faultCode = 0;
+    uint8_t retryCount = 0;
+    const char* faultTitle = nullptr;
+    const char* faultDetail = nullptr;
+
+    // diagnostic
+    uint32_t faultTotal = 0;
+    uint32_t lastFaultUptimeMs = 0;
+    uint8_t  recoverAttempts = 0;
+    uint8_t  lastFaultCode = 0;
+    bool     permanentFault = false;
+
+    uint32_t resetCount = 0;
 };
 
 class UiRenderer_U8g2 {
@@ -50,12 +66,23 @@ public:
     }
 
     void draw(const UiViewModel& vm) {
+        if (vm.isFault) {
+            drawFault(vm);
+            return;
+        }
+
         u8g2.clearBuffer();
         u8g2.setDrawColor(1); // 🔥 항상 1로 시작 (우측 바/잔상 방지)
 
         switch (vm.screen) {
             case UiScreen::Main: drawMain(vm); break;
+            case UiScreen::MenuRoot:  drawMenuRoot(vm); break;
+            case UiScreen::MenuMotion:drawMenuMotion(vm); break;
+            case UiScreen::MenuParams:drawMenuParams(vm); break;
+            case UiScreen::MenuDiag:  drawMenuDiag(vm); break;
+            case UiScreen::MenuSystem:drawMenuSystem(vm); break;
             case UiScreen::EditValue: drawEdit(vm); break;
+            case UiScreen::Engineering: drawEngineering(vm); break;
             default: drawMain(vm); break;
         }
 
@@ -165,15 +192,30 @@ private:
     }
 
     void drawFault(const UiViewModel& vm) {
-        u8g2.setFont(u8g2_font_unifont_t_korean2);
+        u8g2.clearBuffer();
 
-        char buf1[32];
-        snprintf(buf1, sizeof(buf1), "오류 코드 %u",
-                 (unsigned)vm.st.err);
+        u8g2.setDrawColor(1);
+        u8g2.drawBox(0, 0, 128, 64);      // full invert
+        u8g2.setDrawColor(0);
 
-        u8g2.drawUTF8(4, 30, buf1);
-        u8g2.drawUTF8(4, 48,
-                     errorText(vm.st.err));
+        u8g2.setFont(u8g2_font_6x12_tr);
+
+        char buf[20];
+        snprintf(buf, sizeof(buf), "FAULT %02d", vm.faultCode);
+        u8g2.drawStr(10, 16, buf);
+
+        u8g2.drawStr(10, 30, vm.faultTitle);
+
+        u8g2.drawHLine(0, 36, 128);
+
+        char retry[20];
+        snprintf(retry, sizeof(retry), "Retry %d/3", vm.retryCount);
+        u8g2.drawStr(10, 50, retry);
+
+        if (vm.blink)
+            u8g2.drawStr(70, 50, "Hold to reset");
+
+        u8g2.sendBuffer();
     }
 
     /* ---------------- Footer ---------------- */
@@ -208,6 +250,188 @@ private:
         drawHeader(vm);
         drawBody(vm);
         drawFooter(vm);
+    }
+
+    /* ---------------- Menu Common ---------------- */
+
+    void drawMenuHeader(const UiViewModel& vm, const char* title) {
+        // Menu header uses the SAME top bar (no "double header").
+        // This also moves the menu content up (user request: ~14px).
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawUTF8(2, 10, title);
+
+        if (vm.st.state == MotionState::Fault) {
+            u8g2.drawStr(120, 10, "!");
+        }
+        u8g2.drawHLine(0, 12, 128);
+    }
+
+    void drawMenuList(const char* const* items, uint8_t count, uint8_t cursor) {
+        // Use small font to fit 4 menu rows cleanly.
+        u8g2.setFont(u8g2_font_6x10_tf);
+
+        // List area starts right under header line (y=12)
+        const int16_t y0 = 26;
+        const int16_t lineH = 12;
+        const uint8_t visible = 4;
+
+        int start = 0;
+        if (count > visible) {
+            // center cursor in view when possible
+            if (cursor == 0) start = 0;
+            else if (cursor >= count - 1) start = (int)count - (int)visible;
+            else start = (int)cursor - 1;
+        }
+
+        for (uint8_t i = 0; i < visible; i++) {
+            uint8_t idx = (uint8_t)(start + i);
+            if (idx >= count) break;
+            int16_t y = y0 + (int16_t)i * lineH;
+
+            // highlight
+            if (idx == cursor) {
+                u8g2.setDrawColor(1);
+                u8g2.drawBox(0, y - 10, 128, 12);
+                u8g2.setDrawColor(0);
+            } else {
+                u8g2.setDrawColor(1);
+            }
+
+            u8g2.drawUTF8(4, y, items[idx]);
+        }
+
+        // restore
+        u8g2.setDrawColor(1);
+        u8g2.drawHLine(0, 52, 128);
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(2, 63, "Click:Select  Long:Back");
+    }
+
+    /* ---------------- Menu: Root ---------------- */
+
+    void drawMenuRoot(const UiViewModel& vm) {
+        drawMenuHeader(vm, "MENU");
+
+        static const char* const items[] = {
+            "Motion",
+            "Parameters",
+            "Diagnostics",
+            "System"
+        };
+        drawMenuList(items, 4, vm.cursor);
+    }
+
+    /* ---------------- Menu: Motion ---------------- */
+
+    void drawMenuMotion(const UiViewModel& vm) {
+        drawMenuHeader(vm, "Motion");
+
+        static const char* const items[] = {
+            "Start",
+            "Stop",
+            "Home",
+            "Recalibrate"
+        };
+        drawMenuList(items, 4, vm.cursor);
+    }
+
+    /* ---------------- Menu: Params ---------------- */
+
+    void drawMenuParams(const UiViewModel& vm) {
+        drawMenuHeader(vm, "Parameters");
+
+        // show live values in-line (short)
+        char b0[24], b1[24], b2[24], b3[24];
+        snprintf(b0, sizeof(b0), "MaxSps: %d", (int)vm.cfg.maxSps);
+        snprintf(b1, sizeof(b1), "Accel : %d", (int)vm.cfg.accel);
+        snprintf(b2, sizeof(b2), "Dwell : %dms", (int)vm.cfg.dwellMs);
+        snprintf(b3, sizeof(b3), "Rehome: %d", (int)vm.cfg.rehomeEveryCycles);
+
+        const char* items[] = { b0, b1, b2, b3 };
+        drawMenuList(items, 4, vm.cursor);
+    }
+
+    /* ---------------- Menu: Diagnostics ---------------- */
+
+    void drawMenuDiag(const UiViewModel& vm) {
+        drawMenuHeader(vm, "Diagnostics");
+        u8g2.setFont(u8g2_font_6x10_tf);
+
+        char l1[32] = {0}, l2[32] = {0}, l3[32] = {0}, l4[32] = {0};
+
+        switch (vm.page) {
+            case 0: {
+                snprintf(l1, sizeof(l1), "FaultTotal : %lu", (unsigned long)vm.faultTotal);
+                snprintf(l2, sizeof(l2), "LastCode   : %u",  (unsigned)vm.lastFaultCode);
+                snprintf(l3, sizeof(l3), "LastMs     : %lu", (unsigned long)vm.lastFaultUptimeMs);
+                snprintf(l4, sizeof(l4), "Permanent  : %u",  (unsigned)vm.permanentFault);
+                break;
+            }
+            case 1: {
+                snprintf(l1, sizeof(l1), "Hall L:%u/%u R:%u/%u",
+                    (unsigned)vm.st.hallRawL, (unsigned)(vm.st.hallL ? 1 : 0),
+                    (unsigned)vm.st.hallRawR, (unsigned)(vm.st.hallR ? 1 : 0));
+                snprintf(l2, sizeof(l2), "POS:%ld SPS:%d", (long)vm.st.pos, (int)vm.st.currentSps);
+                snprintf(l3, sizeof(l3), "Cycles     : %lu", (unsigned long)vm.st.cycles);
+                snprintf(l4, sizeof(l4), "RecoverTry : %u",  (unsigned)vm.st.recoverAttempts);
+                break;
+            }
+            case 2: {
+                snprintf(l1, sizeof(l1), "State:%u Err:%u", (unsigned)vm.st.state, (unsigned)vm.st.err);
+                snprintf(l2, sizeof(l2), "TravelSteps: %lu", (unsigned long)vm.st.travelSteps);
+                snprintf(l3, sizeof(l3), "Cfg MaxSps : %d", (int)vm.cfg.maxSps);
+                snprintf(l4, sizeof(l4), "Cfg Accel  : %d", (int)vm.cfg.accel);
+                break;
+            }
+            default: {
+                snprintf(l1, sizeof(l1), "-");
+                snprintf(l2, sizeof(l2), "-");
+                snprintf(l3, sizeof(l3), "-");
+                snprintf(l4, sizeof(l4), "-");
+                break;
+            }
+        }
+
+        u8g2.drawUTF8(2, 25, l1);
+        u8g2.drawUTF8(2, 37, l2);
+        u8g2.drawUTF8(2, 49, l3);
+        u8g2.drawUTF8(2, 61, l4);
+
+        // Page indicator (right-bottom)
+        char pbuf[12];
+        snprintf(pbuf, sizeof(pbuf), "%u/3", (unsigned)(vm.page + 1));
+        u8g2.drawStr(106, 63, pbuf);
+    }
+
+    /* ---------------- Menu: System ---------------- */
+
+    void drawMenuSystem(const UiViewModel& vm) {
+        drawMenuHeader(vm, "System");
+
+        static const char* const items[] = {
+            "About",
+            "Back"
+        };
+        drawMenuList(items, 2, vm.cursor);
+    }
+
+    /* ---------------- Engineering ---------------- */
+
+    void drawEngineering(const UiViewModel& vm) {
+        drawMenuHeader(vm, "Engineering");
+
+        static const char* const items[] = {
+            "Force Home",
+            "Move Left",
+            "Move Right",
+            "Disable Motor"
+        };
+
+        drawMenuList(items, 4, vm.cursor);
+
+        // override footer hint
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(2, 63, "Click:Run  Long:Back");
     }
 
     /* ---------------- Edit ---------------- */

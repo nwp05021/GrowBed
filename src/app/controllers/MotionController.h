@@ -37,6 +37,11 @@ struct MotionStatus {
     uint32_t travelSteps = 0;
     uint32_t cycles = 0;
     uint8_t recoverAttempts = 0;
+
+    MotionError lastErr = MotionError::None;
+    uint32_t faultTotal = 0;          // 누적 fault 횟수(전원 켠 동안)
+    uint32_t lastFaultUptimeMs = 0;   // 마지막 fault 시각(ms)
+    bool permanentFault = false;      // 3회 실패 후 유지 여부
 };
 
 class MotionController {
@@ -47,7 +52,7 @@ public:
         pinMode(PIN_HALL_RIGHT, INPUT_PULLDOWN);
         drv.begin();
         drv.enable(true);
-        resetForHoming();
+        resetForHoming(true);
     }
 
     void applyConfig(const MotionConfig& cfg_) { cfg = cfg_; }
@@ -90,7 +95,7 @@ public:
         if (pending.home || pending.recalibrate) {
             pending.home = false;
             pending.recalibrate = false;
-            resetForHoming();
+            resetForHoming(true);  // 사용자 개입
         }
 
         if (pending.injectFault) {
@@ -111,7 +116,7 @@ public:
         if (pending.start) {
             pending.start = false;
             // If stopped, start by homing. Otherwise ignore (already running).
-            if (st.state == MotionState::Stopped) resetForHoming();
+            if (st.state == MotionState::Stopped) resetForHoming(true);
         }
 
         st.hallRawL = (uint8_t)digitalRead(PIN_HALL_LEFT);
@@ -120,7 +125,10 @@ public:
         st.hallL = (st.hallRawL == HIGH);
         st.hallR = (st.hallRawR == HIGH);
 
-        if (st.hallL && st.hallR) fault(MotionError::BothLimitsActive);
+        if (st.hallL && st.hallR) {
+            fault(MotionError::BothLimitsActive);
+            return;
+        }
 
         if (st.state == MotionState::Stopped) {
             drv.enable(false);
@@ -130,17 +138,26 @@ public:
         }
 
         if (st.state == MotionState::RecoverWait) {
-            if (nowMs - stateEnterMs >= 2000) resetForHoming();
+            if (st.permanentFault) return;           // 🔒 영구 Fault면 자동 복구 금지
+            if (nowMs - stateEnterMs >= 2000) resetForHoming(false);
             return;
         }
 
         if (st.state == MotionState::Fault) {
             drv.enable(false);
-            if (st.recoverAttempts < 3) {
-                st.recoverAttempts++;
+
+            if (st.recoverAttempts >= 3) {
+                // 영구 Fault 유지 (사용자 개입 or 리셋까지)
+                st.permanentFault = true;
+                return;
+            }
+
+            // Fault 화면 유지 시간 후 RecoverWait로 이동
+            if (nowMs - stateEnterMs >= 2000) {
                 st.state = MotionState::RecoverWait;
                 stateEnterMs = nowMs;
             }
+
             return;
         }
 
@@ -242,7 +259,7 @@ public:
                 st.currentSps = 0;
                 if (nowMs - stateEnterMs >= cfg.dwellMs) {
                     if (st.cycles > 0 && (st.cycles % cfg.rehomeEveryCycles) == 0) {
-                        resetForHoming();
+                        resetForHoming(true);
                         return;
                     }
                     st.state = nextAfterDwell;
@@ -294,7 +311,7 @@ private:
 
     static float maxf(float a, float b) { return a > b ? a : b; }
 
-    void resetForHoming() {
+    void resetForHoming(bool userInitiated) {
         drv.enable(true);
         st.state = MotionState::HomingLeft;
         st.err = MotionError::None;
@@ -308,6 +325,11 @@ private:
         moveSteps = 0;
         lastWasRightEnd = false;
         st.travelSteps = 0;
+
+        if (userInitiated) {
+            st.recoverAttempts = 0;
+            st.permanentFault = false;
+        }
     }
 
     void enterStopped(uint32_t nowMs) {
@@ -319,12 +341,25 @@ private:
     }
 
     void fault(MotionError e) {
+        const uint32_t now = millis();
+
+        // 최초 Fault 진입만 카운트 (Fault 상태에서 fault() 다시 호출되면 누적 방지)
+        if (st.state != MotionState::Fault) {
+            st.recoverAttempts++;             // retryCount (1..)
+            st.faultTotal++;                  // 누적 fault 횟수
+            st.lastErr = e;                   // 마지막 fault 기록
+            st.lastFaultUptimeMs = now;       // timestamp
+        }
+
         st.state = MotionState::Fault;
         st.err = e;
         st.currentSps = 0;
         st.targetSps = 0;
         drv.enable(false);
-        stateEnterMs = millis();
+        stateEnterMs = now;
+
+        // 3회 이상이면 영구 Fault 플래그
+        st.permanentFault = (st.recoverAttempts >= 3);
     }
 
     void enterDwell(uint32_t nowMs, MotionState next) {
