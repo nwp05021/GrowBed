@@ -8,13 +8,17 @@
 #include "platform/envelope/EnvelopeCodec.h"
 
 #include "app/system/SettingsStore.h"
+#include "hal/EncoderHal_Arduino.h"
 
 MotionConfig motionCfg;
 UiConfig uiCfg;
 EncoderConfig encCfg;
 
 MotionController motion;
-EncoderController enc;
+
+EncoderHal_Arduino encHal;
+EncoderController enc(encHal);
+
 UiController ui;
 
 static SettingsStore store;
@@ -125,17 +129,14 @@ void setup() {
     //-------------------------------------------
     // Auto Test
     //-------------------------------------------
-    // motion.setLedModeManual(true);      // LED/Motor enable 강제
-    // motion.setAutoHallIntervalMs(5000); // 5초 간격
-    // motion.setAutoHallTest(true);
-    // motion.requestStart();              // Stopped 상태면 홈부터 시작    
-
     motion.setMotionStallPulseTimeoutMs(2000);
     motion.setMotionStallNoEndTimeoutMs(0);
 
     motion.startFactoryAutoTest(2000);   // 2초 간격, 10 cycles 기본
     
+    encHal.beginPins();
     enc.begin(encCfg);
+
     ui.begin(uiCfg, &motion);
 }
 
