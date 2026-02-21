@@ -80,4 +80,97 @@ bool GrowBedNode::buildTelemetryBasic(platform::envelope::Envelope& outTel,
     return true;
 }
 
+bool GrowBedNode::buildEventAlert(platform::envelope::Envelope& outEvt,
+                                 uint8_t* dataBuf, uint16_t dataMax,
+                                 uint8_t faultCode, uint32_t uptimeMs, uint32_t cycles) {
+    if (!dataBuf || dataMax < 13) return false;
+
+    // DATA:
+    // 0: faultCode
+    // 1: state (snapshot)
+    // 2..5: uptimeMs (u32)
+    // 6..9: cycles (u32)
+    // 10..12: reserved
+    dataBuf[0] = faultCode;
+    dataBuf[1] = _motion ? (uint8_t)_motion->status().state : 0;
+
+    dataBuf[2] = (uint8_t)(uptimeMs & 0xFF);
+    dataBuf[3] = (uint8_t)((uptimeMs >> 8) & 0xFF);
+    dataBuf[4] = (uint8_t)((uptimeMs >> 16) & 0xFF);
+    dataBuf[5] = (uint8_t)((uptimeMs >> 24) & 0xFF);
+
+    dataBuf[6] = (uint8_t)(cycles & 0xFF);
+    dataBuf[7] = (uint8_t)((cycles >> 8) & 0xFF);
+    dataBuf[8] = (uint8_t)((cycles >> 16) & 0xFF);
+    dataBuf[9] = (uint8_t)((cycles >> 24) & 0xFF);
+
+    dataBuf[10] = 0;
+    dataBuf[11] = 0;
+    dataBuf[12] = 0;
+
+    outEvt.capId = platform::capability::CAP_DIAGNOSTICS_HEALTH;
+    outEvt.kind = platform::envelope::Kind::Evt;
+    outEvt.msgId = 0x10; // ALERT
+    outEvt.flags = 0;
+    outEvt.hasSeq = false;
+    outEvt.seq = 0;
+    outEvt.data = dataBuf;
+    outEvt.dataLen = 13;
+    return true;
+}
+
+
+bool GrowBedNode::buildEventFactoryValidation(platform::envelope::Envelope& outEvt,
+                         uint8_t* dataBuf, uint16_t dataMax,
+                         uint32_t seq, bool pass, uint8_t failCode, uint8_t failStep,
+                         uint32_t durationMs, uint32_t uptimeMs, uint32_t cycles) {
+    if (!dataBuf || dataMax < 21) return false;
+
+    // DATA:
+    // 0..3: seq (u32)
+    // 4: pass(1)/fail(0)
+    // 5: failCode
+    // 6: failStep
+    // 7..10: durationMs (u32)
+    // 11..14: uptimeMs (u32)
+    // 15..18: cycles (u32)
+    // 19..20: reserved
+    dataBuf[0] = (uint8_t)(seq & 0xFF);
+    dataBuf[1] = (uint8_t)((seq >> 8) & 0xFF);
+    dataBuf[2] = (uint8_t)((seq >> 16) & 0xFF);
+    dataBuf[3] = (uint8_t)((seq >> 24) & 0xFF);
+
+    dataBuf[4] = pass ? 1 : 0;
+    dataBuf[5] = failCode;
+    dataBuf[6] = failStep;
+
+    dataBuf[7]  = (uint8_t)(durationMs & 0xFF);
+    dataBuf[8]  = (uint8_t)((durationMs >> 8) & 0xFF);
+    dataBuf[9]  = (uint8_t)((durationMs >> 16) & 0xFF);
+    dataBuf[10] = (uint8_t)((durationMs >> 24) & 0xFF);
+
+    dataBuf[11] = (uint8_t)(uptimeMs & 0xFF);
+    dataBuf[12] = (uint8_t)((uptimeMs >> 8) & 0xFF);
+    dataBuf[13] = (uint8_t)((uptimeMs >> 16) & 0xFF);
+    dataBuf[14] = (uint8_t)((uptimeMs >> 24) & 0xFF);
+
+    dataBuf[15] = (uint8_t)(cycles & 0xFF);
+    dataBuf[16] = (uint8_t)((cycles >> 8) & 0xFF);
+    dataBuf[17] = (uint8_t)((cycles >> 16) & 0xFF);
+    dataBuf[18] = (uint8_t)((cycles >> 24) & 0xFF);
+
+    dataBuf[19] = 0;
+    dataBuf[20] = 0;
+
+    outEvt.capId = platform::capability::CAP_DIAGNOSTICS_HEALTH;
+    outEvt.kind = platform::envelope::Kind::Evt;
+    outEvt.msgId = 0x11; // FACTORY_VALIDATION
+    outEvt.flags = 0;
+    outEvt.hasSeq = false;
+    outEvt.seq = 0;
+    outEvt.data = dataBuf;
+    outEvt.dataLen = 21;
+    return true;
+}
+
 } // namespace product::growbed

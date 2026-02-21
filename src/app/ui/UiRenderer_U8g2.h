@@ -11,8 +11,14 @@ enum class UiScreen : uint8_t {
     MenuParams,
     MenuDiag,
     MenuSystem,
+    MenuLed,
+    MenuTest,
+    TestRunning,
+    TestResult,
+    Toast,
+    AlertPopup,
     EditValue,
-    Engineering
+    Engineering,
 };
 
 struct UiViewModel {
@@ -36,6 +42,7 @@ struct UiViewModel {
     int32_t editMin = 0;
     int32_t editMax = 0;
     const char* editUnit = nullptr;
+    bool editAsTime = false;
 
     // fault
     bool isFault = false;
@@ -52,6 +59,38 @@ struct UiViewModel {
     bool     permanentFault = false;
 
     uint32_t resetCount = 0;
+
+    // alert popup
+    bool showAlertPopup = false;
+    uint8_t popupFaultCode = 0;
+    uint32_t popupAlertSeq = 0;
+
+    // toast (simple popup)
+    bool showToast = false;
+    const char* toastTitle = nullptr;
+    const char* toastLine1 = nullptr;
+    const char* toastLine2 = nullptr;
+
+    // test running
+
+    // factory validation
+    bool factoryRunning = false;
+    bool factoryDone = false;
+    bool factoryPass = false;
+    uint8_t factoryStep = 0;
+    const char* factoryStepName = nullptr;
+    uint8_t factoryFailCode = 0;
+    uint8_t factoryFailStep = 0;
+    uint32_t factoryStepElapsedMs = 0;
+    bool testRunning = false;
+    uint8_t testStep = 0;
+    uint32_t testElapsedMs = 0;
+    uint32_t testNextInMs = 0;
+
+    bool autoHallEnabled = false;
+    bool factoryAutoRunning = false;
+    uint16_t factoryAutoProgress = 0;   // 진행된 cycles
+    uint16_t factoryAutoTarget = 0;    
 };
 
 class UiRenderer_U8g2 {
@@ -81,8 +120,14 @@ public:
             case UiScreen::MenuParams:drawMenuParams(vm); break;
             case UiScreen::MenuDiag:  drawMenuDiag(vm); break;
             case UiScreen::MenuSystem:drawMenuSystem(vm); break;
+            case UiScreen::MenuLed:   drawMenuLed(vm); break;
+            case UiScreen::MenuTest:  drawMenuTest(vm); break;
+            case UiScreen::TestRunning: drawTestRunning(vm); break;
+            case UiScreen::Toast:     drawToast(vm); break;
+            case UiScreen::AlertPopup:drawAlertPopup(vm); break;
             case UiScreen::EditValue: drawEdit(vm); break;
             case UiScreen::Engineering: drawEngineering(vm); break;
+            case UiScreen::TestResult: drawTestResult(vm); break;            
             default: drawMain(vm); break;
         }
 
@@ -218,30 +263,77 @@ private:
         u8g2.sendBuffer();
     }
 
+    void drawAlertPopup(const UiViewModel& vm) {
+        u8g2.clearBuffer();
+        u8g2.setDrawColor(1);
+        // outer box
+        u8g2.drawFrame(0, 0, 128, 64);
+        u8g2.drawFrame(1, 1, 126, 62);
+
+        u8g2.setFont(u8g2_font_6x12_tr);
+        u8g2.drawStr(10, 16, "ALERT SENT");
+
+        char buf[24];
+        snprintf(buf, sizeof(buf), "Fault F%u", (unsigned)vm.popupFaultCode);
+        u8g2.drawStr(10, 32, buf);
+
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(10, 48, "Click:OK  Long:Log");
+        u8g2.sendBuffer();
+    }
+
     /* ---------------- Footer ---------------- */
 
     void drawFooter(const UiViewModel& vm) {
-        int y = 54;   // Footer 영역
-        int x = 8;
+        // Pixel-icon footer (no UTF8 symbol dependency)
+        // Layout: [LED icon + mode] [Motor icon + state]  Lx Ry
 
-        // Motor
-        if (vm.st.state == MotionState::MoveLeft ||
-            vm.st.state == MotionState::MoveRight)
-            u8g2.drawXBM(x, y, 12, 12, ICON_MOTOR);
-        x += 28;
+        static const uint8_t LED_ON[8]  = {0x18,0x3C,0x7E,0x7E,0x7E,0x3C,0x18,0x00};
+        static const uint8_t LED_OFF[8] = {0x18,0x24,0x42,0x42,0x42,0x24,0x18,0x00};
+        static const uint8_t M_RIGHT[8] = {0x08,0x0C,0xFE,0xFF,0xFE,0x0C,0x08,0x00};
+        static const uint8_t M_LEFT[8]  = {0x10,0x30,0x7F,0xFF,0x7F,0x30,0x10,0x00};
+        static const uint8_t M_STOP[8]  = {0x7E,0x7E,0x7E,0x7E,0x7E,0x7E,0x7E,0x00};
 
-        // Hall
-        if (vm.st.hallL || vm.st.hallR)
-            u8g2.drawXBM(x, y, 12, 12, ICON_HALL);
-        x += 28;
+        const int y = 56;
 
-        // WiFi (임시 항상 표시)
-        u8g2.drawXBM(x, y, 12, 12, ICON_WIFI);
-        x += 28;
+        // LED icon
+        const uint8_t* ledIco = (vm.st.ledOn ? LED_ON : LED_OFF);
+        u8g2.drawXBMP(0, y, 8, 8, ledIco);
 
-        // Error
-        if (vm.st.err != MotionError::None)
-            u8g2.drawXBM(x, y, 12, 12, ICON_ERROR);
+        u8g2.setFont(u8g2_font_6x10_tf);
+        if (vm.st.ledMode == LedMode::Auto) {
+            u8g2.drawStr(9, 63, "A");
+        }
+
+        // Motor icon
+        const uint8_t* motIco = M_STOP;
+        char motCh[2] = {0,0};
+        switch (vm.st.state) {
+            case MotionState::MoveRight: motIco = M_RIGHT; break;
+            case MotionState::MoveLeft:  motIco = M_LEFT;  break;
+            case MotionState::Dwell:     motIco = M_STOP;  break;
+            case MotionState::HomingLeft:
+            case MotionState::CalibMoveRight: motIco = M_STOP; motCh[0] = 'H'; break;
+            case MotionState::Fault:     motIco = M_STOP; motCh[0] = '!'; break;
+            case MotionState::RecoverWait:
+            case MotionState::Stopped:  motIco = M_STOP;  break;
+            default: break;
+        }
+
+        u8g2.drawXBMP(18, y, 8, 8, motIco);
+        if (motCh[0] != 0) {
+            u8g2.drawStr(27, 63, motCh);
+        }
+
+        // Sensors text
+        char buf[16];
+        snprintf(buf, sizeof(buf), "L%u R%u", (unsigned)(vm.st.hallL ? 1 : 0), (unsigned)(vm.st.hallR ? 1 : 0));
+        u8g2.drawStr(40, 63, buf);
+
+        // Factory AutoTest indicator
+        if (vm.factoryAutoRunning) {
+            u8g2.drawStr(112, 63, "AT");
+        }        
     }
 
     /* ---------------- Main ---------------- */
@@ -271,9 +363,9 @@ private:
         u8g2.setFont(u8g2_font_6x10_tf);
 
         // List area starts right under header line (y=12)
-        const int16_t y0 = 26;
+        const int16_t y0 = 24;
         const int16_t lineH = 12;
-        const uint8_t visible = 4;
+        const uint8_t visible = 3;
 
         int start = 0;
         if (count > visible) {
@@ -316,9 +408,10 @@ private:
             "Motion",
             "Parameters",
             "Diagnostics",
-            "System"
+            "System",
+            "Test"
         };
-        drawMenuList(items, 4, vm.cursor);
+        drawMenuList(items, 5, vm.cursor);
     }
 
     /* ---------------- Menu: Motion ---------------- */
@@ -329,10 +422,9 @@ private:
         static const char* const items[] = {
             "Start",
             "Stop",
-            "Home",
             "Recalibrate"
         };
-        drawMenuList(items, 4, vm.cursor);
+        drawMenuList(items, 3, vm.cursor);
     }
 
     /* ---------------- Menu: Params ---------------- */
@@ -383,6 +475,61 @@ private:
                 snprintf(l4, sizeof(l4), "Cfg Accel  : %d", (int)vm.cfg.accel);
                 break;
             }
+            case 3: {
+                // Recent Alerts (last 4)
+                snprintf(l1, sizeof(l1), "Recent Alerts (%u)", (unsigned)vm.st.alertCount);
+                // show up to 3 entries on remaining lines
+                for (int i = 0; i < 3; i++) {
+                    int idx = (int)vm.st.alertHead - 1 - i;
+                    while (idx < 0) idx += 5;
+                    idx %= 5;
+                    uint8_t code = vm.st.alertCodes[idx];
+                    uint32_t sec = vm.st.alertUptimeSec[idx];
+                    char* out = (i == 0) ? l2 : (i == 1 ? l3 : l4);
+                    if (code == 0 && sec == 0) {
+                        snprintf(out, 32, "-");
+                    } else {
+                        snprintf(out, 32, "F%u  %lus", (unsigned)code, (unsigned long)sec);
+                    }
+                }
+                break;
+            }
+
+            case 4: {
+                // Factory Validation Result
+                snprintf(l1, sizeof(l1), "Factory Seq : %lu", (unsigned long)vm.st.factorySeq);
+                snprintf(l2, sizeof(l2), "Last  : %s", vm.st.factoryLastPass ? "PASS" : "FAIL");
+                snprintf(l3, sizeof(l3), "FailC : %u Step:%u", (unsigned)vm.st.factoryFailCode, (unsigned)vm.st.factoryFailStep);
+                snprintf(l4, sizeof(l4), "P/F  : %lu/%lu", (unsigned long)vm.st.factoryPassCount, (unsigned long)vm.st.factoryFailCount);
+                break;
+            }
+
+            case 5: {
+                // Factory Validation History (last 3)
+                snprintf(l1, sizeof(l1), "Factory Log (%u)", (unsigned)vm.st.factoryLogCount);
+                for (int i = 0; i < 3; i++) {
+                    int idx = (int)vm.st.factoryLogHead - 1 - i;
+                    while (idx < 0) idx += 8;
+                    idx %= 8;
+                    const uint8_t pass = vm.st.factoryLogPass[idx];
+                    const uint8_t fc = vm.st.factoryLogFailCode[idx];
+                    const uint8_t fs = vm.st.factoryLogFailStep[idx];
+                    const uint16_t dur = vm.st.factoryLogDurationSec[idx];
+                    const uint32_t cyc = vm.st.factoryLogCycles[idx];
+                    char* out = (i == 0) ? l2 : (i == 1 ? l3 : l4);
+                    if (i >= (int)vm.st.factoryLogCount) {
+                        snprintf(out, 32, "-");
+                    } else {
+                        if (pass) {
+                            snprintf(out, 32, "PASS  %us  C%lu", (unsigned)dur, (unsigned long)cyc);
+                        } else {
+                            snprintf(out, 32, "FAIL%u S%u %us", (unsigned)fc, (unsigned)fs, (unsigned)dur);
+                        }
+                    }
+                }
+                break;
+            }
+
             default: {
                 snprintf(l1, sizeof(l1), "-");
                 snprintf(l2, sizeof(l2), "-");
@@ -399,20 +546,173 @@ private:
 
         // Page indicator (right-bottom)
         char pbuf[12];
-        snprintf(pbuf, sizeof(pbuf), "%u/3", (unsigned)(vm.page + 1));
+        snprintf(pbuf, sizeof(pbuf), "%u/6", (unsigned)(vm.page + 1));
         u8g2.drawStr(106, 63, pbuf);
-    }
-
-    /* ---------------- Menu: System ---------------- */
+    }    /* ---------------- Menu: System ---------------- */
 
     void drawMenuSystem(const UiViewModel& vm) {
         drawMenuHeader(vm, "System");
 
         static const char* const items[] = {
+            "Time Sync",
+            "LED",
             "About",
             "Back"
         };
-        drawMenuList(items, 2, vm.cursor);
+        drawMenuList(items, 4, vm.cursor);
+    }
+
+    /* ---------------- Menu: Test ---------------- */
+
+    void drawMenuTest(const UiViewModel& vm) {
+        drawMenuHeader(vm, "Test");
+
+        static const char* const items[] = {
+            "LED ON",
+            "LED OFF",
+            "Move Left",
+            "Move Right",
+            "Touch Left",
+            "Touch Right",
+            "Factory Mode (10)"
+        };
+        drawMenuList(items, 7, vm.cursor);
+    }
+
+    /* ---------------- Test Running ---------------- */
+
+    void drawTestRunning(const UiViewModel& vm) {
+        if (vm.factoryAutoRunning) {
+            drawMenuHeader(vm, "FACTORY MODE");
+
+            u8g2.setFont(u8g2_font_6x10_tf);
+
+            char l1[32];
+            char l2[32];
+
+            snprintf(l1, sizeof(l1), "Cycles: %u/%u",
+                    vm.factoryAutoProgress,
+                    vm.factoryAutoTarget);
+
+            snprintf(l2, sizeof(l2), "State: %u", (unsigned)vm.st.state);
+
+            u8g2.drawStr(2, 26, l1);
+            u8g2.drawStr(2, 38, l2);
+
+            u8g2.drawHLine(0, 52, 128);
+            u8g2.drawStr(2, 63, "Long:Stop");
+
+            return;
+        }
+
+        if (vm.factoryRunning || vm.factoryDone) {
+            drawMenuHeader(vm, "FACTORY");
+
+            u8g2.setFont(u8g2_font_6x10_tf);
+            char l1[32];
+            char l2[32];
+            char l3[32];
+
+            const char* stepName = vm.factoryStepName ? vm.factoryStepName : "-";
+            snprintf(l1, sizeof(l1), "Step:%u %s", (unsigned)vm.factoryStep, stepName);
+            snprintf(l2, sizeof(l2), "State:%u Err:%u", (unsigned)vm.st.state, (unsigned)vm.st.err);
+            snprintf(l3, sizeof(l3), "t:%lus", (unsigned long)(vm.factoryStepElapsedMs / 1000));
+
+            u8g2.drawUTF8(2, 26, l1);
+            u8g2.drawUTF8(2, 38, l2);
+            u8g2.drawUTF8(2, 50, l3);
+
+            u8g2.drawHLine(0, 52, 128);
+            if (vm.factoryDone) {
+                if (vm.factoryPass) {
+                    u8g2.drawStr(2, 63, "PASS  Click:Back");
+                } else {
+                    char b[32];
+                    snprintf(b, sizeof(b), "FAIL c:%u s:%u", (unsigned)vm.factoryFailCode, (unsigned)vm.factoryFailStep);
+                    u8g2.drawStr(2, 63, b);
+                }
+            } else {
+                u8g2.drawStr(2, 63, "Long:Stop");
+            }
+
+            if (vm.factoryAutoRunning) {
+                char p[24];
+                snprintf(p, sizeof(p), "Cycles: %u/%u",
+                        vm.factoryAutoProgress,
+                        vm.factoryAutoTarget);
+                u8g2.drawStr(70, 63, p);
+            }
+
+            return;
+        }
+    }
+
+    /* ---------------- Toast ---------------- */
+
+    void drawToast(const UiViewModel& vm) {
+        u8g2.clearBuffer();
+        u8g2.setDrawColor(1);
+        u8g2.drawFrame(0, 0, 128, 64);
+        u8g2.drawFrame(1, 1, 126, 62);
+
+        u8g2.setFont(u8g2_font_6x12_tr);
+        if (vm.toastTitle) u8g2.drawUTF8(6, 16, vm.toastTitle);
+
+        u8g2.setFont(u8g2_font_6x10_tf);
+        if (vm.toastLine1) u8g2.drawUTF8(6, 34, vm.toastLine1);
+        if (vm.toastLine2) u8g2.drawUTF8(6, 46, vm.toastLine2);
+
+        u8g2.drawStr(6, 60, "Click:OK");
+        u8g2.sendBuffer();
+    }
+
+    /* ---------------- Menu: LED ---------------- */
+
+    static void fmtHHMM(char* out, size_t outSz, uint16_t minutes) {
+        uint16_t m = minutes % 1440;
+        uint16_t hh = m / 60;
+        uint16_t mm = m % 60;
+        snprintf(out, outSz, "%02u:%02u", (unsigned)hh, (unsigned)mm);
+    }
+
+    void drawMenuLed(const UiViewModel& vm) {
+        drawMenuHeader(vm, "LED");
+
+        char line0[24];
+        char line1[24];
+        char line2[24];
+        char line3[24];
+        char line4[24];
+
+        // 0) Mode
+        snprintf(line0, sizeof(line0), "Mode: %s", (vm.st.ledMode == LedMode::Auto) ? "AUTO" : "MAN");
+
+        // 1) Manual
+        snprintf(line1, sizeof(line1), "Manual: %s", vm.st.ledManualOn ? "ON" : "OFF");
+
+        // 2) Auto ON
+        char tOn[8];
+        fmtHHMM(tOn, sizeof(tOn), vm.st.ledOnStartMin);
+        snprintf(line2, sizeof(line2), "Auto ON : %s", tOn);
+
+        // 3) Auto OFF
+        char tOff[8];
+        fmtHHMM(tOff, sizeof(tOff), vm.st.ledOnEndMin);
+        snprintf(line3, sizeof(line3), "Auto OFF: %s", tOff);
+
+        // 4) Back
+        snprintf(line4, sizeof(line4), "Back");
+
+        const char* items[] = { line0, line1, line2, line3, line4 };
+        drawMenuList(items, 5, vm.cursor);
+
+        // footer hint
+        u8g2.setFont(u8g2_font_6x10_tf);
+        if (!vm.st.ledClockValid && vm.st.ledMode == LedMode::Auto) {
+            u8g2.drawStr(2, 63, "Clock:N/A (Auto=AlwaysOn)");
+        } else {
+            u8g2.drawStr(2, 63, "Click:Select  Long:Back");
+        }
     }
 
     /* ---------------- Engineering ---------------- */
@@ -444,9 +744,15 @@ private:
             u8g2.drawUTF8(4, 30, vm.editLabel);
 
         char buf[24];
-        snprintf(buf, sizeof(buf), "%ld%s",
-                 (long)vm.editValue,
-                 vm.editUnit ? vm.editUnit : "");
+        if (vm.editAsTime) {
+            char t[8];
+            fmtHHMM(t, sizeof(t), (uint16_t)vm.editValue);
+            snprintf(buf, sizeof(buf), "%s", t);
+        } else {
+            snprintf(buf, sizeof(buf), "%ld%s",
+                     (long)vm.editValue,
+                     vm.editUnit ? vm.editUnit : "");
+        }
 
         u8g2.setFont(u8g2_font_logisoso20_tf);
         int16_t w = u8g2.getStrWidth(buf);
@@ -483,4 +789,27 @@ private:
             default: return "";
         }
     }
+
+    void drawTestResult(const UiViewModel& vm) {
+
+        drawMenuHeader(vm, "FACTORY RESULT");
+
+        u8g2.setFont(u8g2_font_6x10_tf);
+
+        if (vm.st.factoryLastPass) {
+            u8g2.drawStr(2, 30, "RESULT: PASS");
+        } else {
+            u8g2.drawStr(2, 30, "RESULT: FAIL");
+        }
+
+        char buf[32];
+        snprintf(buf, sizeof(buf),
+                "Duration:%lus",
+                vm.st.factoryLastDurationMs / 1000);
+
+        u8g2.drawStr(2, 44, buf);
+
+        u8g2.drawHLine(0, 52, 128);
+        u8g2.drawStr(2, 63, "Click:Back");
+    }    
 };

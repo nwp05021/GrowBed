@@ -49,3 +49,14 @@
 #ifndef PIN_I2C_SCL
 #define PIN_I2C_SCL    21
 #endif
+
+// Grow LED (Pico onboard LED is GPIO25)
+#ifndef PIN_GROW_LED
+#define PIN_GROW_LED   25
+#endif
+
+// Hall polarity (0 = active-high, 1 = active-low)
+// NOTE: Current v0.2.0 wiring uses INPUT_PULLDOWN, so default is active-high.
+#ifndef HALL_ACTIVE_LOW
+#define HALL_ACTIVE_LOW 0
+#endif

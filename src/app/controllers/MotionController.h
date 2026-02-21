@@ -20,7 +20,13 @@ enum class MotionError : uint8_t {
     HomingTimeout = 1,
     TravelTimeout = 2,
     CalibFailed = 3,
-    BothLimitsActive = 4
+    BothLimitsActive = 4,
+    MotionStall = 5
+};
+
+enum class LedMode : uint8_t {
+    Auto = 0,
+    Manual = 1
 };
 
 struct MotionStatus {
@@ -31,9 +37,11 @@ struct MotionStatus {
     long pos = 0;
     bool hallL = false;
     bool hallR = false;
+
     // raw digitalRead values (0/1) for diagnostics
     uint8_t hallRawL = 0;
     uint8_t hallRawR = 0;
+
     uint32_t travelSteps = 0;
     uint32_t cycles = 0;
     uint8_t recoverAttempts = 0;
@@ -42,243 +50,226 @@ struct MotionStatus {
     uint32_t faultTotal = 0;          // 누적 fault 횟수(전원 켠 동안)
     uint32_t lastFaultUptimeMs = 0;   // 마지막 fault 시각(ms)
     bool permanentFault = false;      // 3회 실패 후 유지 여부
+
+    // ---- LED policy status (for UI/diagnostics) ----
+    bool ledOn = false;
+    LedMode ledMode = LedMode::Auto;
+    bool ledManualOn = false;
+    uint16_t ledOnStartMin = 0; // minutes since midnight
+    uint16_t ledOnEndMin = 0;   // minutes since midnight
+    bool ledClockValid = false;
+    uint16_t ledClockMin = 0;
+
+    // ---- Alerts (Fault -> LineBed EVT + UI recent log) ----
+    uint32_t alertSeq = 0;              // increments every alert
+    uint8_t  alertHead = 0;             // ring buffer head (next write index)
+    uint8_t  alertCount = 0;            // <= 5
+    uint8_t  alertCodes[5] = {0};       // last alerts (ring)
+    uint32_t alertUptimeSec[5] = {0};   // seconds since boot at alert time
+    bool     alertPending = false;      // true when a new alert is queued (consumable)
+    uint8_t  alertPendingCode = 0;
+
+    // ---- Factory Validation result (persisted) ----
+    uint32_t factorySeq = 0;
+    bool     factoryLastPass = false;
+    uint8_t  factoryFailCode = 0;
+    uint8_t  factoryFailStep = 0;
+    uint32_t factoryLastDurationMs = 0;
+    uint32_t factoryLastUptimeSec = 0;
+    uint32_t factoryPassCount = 0;
+    uint32_t factoryFailCount = 0;
+
+    // ---- Factory Validation history log (ring, max 8) ----
+    uint8_t  factoryLogHead = 0;
+    uint8_t  factoryLogCount = 0;
+    uint8_t  factoryLogPass[8] = {0};
+    uint8_t  factoryLogFailCode[8] = {0};
+    uint8_t  factoryLogFailStep[8] = {0};
+    uint16_t factoryLogDurationSec[8] = {0};
+    uint32_t factoryLogUptimeSec[8] = {0};
+    uint32_t factoryLogCycles[8] = {0};
 };
 
 class MotionController {
 public:
-    void begin(const MotionConfig& cfg_) {
-        cfg = cfg_;
-        pinMode(PIN_HALL_LEFT, INPUT_PULLDOWN);
-        pinMode(PIN_HALL_RIGHT, INPUT_PULLDOWN);
-        drv.begin();
-        drv.enable(true);
-        resetForHoming(true);
-    }
+    // Alert callback (e.g., send to LineBed). Called at fault time.
+    using AlertCallback = void(*)(uint8_t code, uint32_t seq, uint32_t uptimeMs, uint32_t cycles);
+    using FactoryCallback = void(*)(uint32_t seq, bool pass, uint8_t failCode, uint8_t failStep,
+                                    uint32_t durationMs, uint32_t uptimeMs, uint32_t cycles);
 
-    void applyConfig(const MotionConfig& cfg_) { cfg = cfg_; }
+public:
+    // UI/Test can temporarily mute popups/alerts while running scripted validation.
+    // Safety behavior (motor disable, state transitions) remains intact.
+    void setUiMuteSeconds(uint16_t seconds);
+    bool isUiMuteActive() const;
 
-    const MotionConfig& config() const { return cfg; }
+    void begin(const MotionConfig& cfg_);
 
-    const MotionStatus& status() const { return st; }
+    // Restore alert ring buffer from persisted storage.
+    void applyPersistedAlerts(uint32_t seq, uint8_t head, uint8_t count,
+                              const uint8_t* codes, const uint32_t* uptimeSec);
+
+    // Restore persisted factory validation result + history log.
+    void applyPersistedFactory(uint32_t seq, bool lastPass, uint8_t failCode, uint8_t failStep,
+                               uint32_t durationMs, uint32_t uptimeSec,
+                               uint32_t passCount, uint32_t failCount,
+                               uint8_t logHead, uint8_t logCount,
+                               const uint8_t* logPass, const uint8_t* logFailCode, const uint8_t* logFailStep,
+                               const uint16_t* logDurationSec, const uint32_t* logUptimeSec, const uint32_t* logCycles);
+
+    // Record a factory validation result (called by UI).
+    void recordFactoryResult(bool pass, uint8_t failCode, uint8_t failStep, uint32_t durationMs, uint32_t uptimeMs);
+
+    void setAlertCallback(AlertCallback cb);
+    void setFactoryCallback(FactoryCallback cb);
+
+    // UI can call this after showing a popup.
+    void acknowledgeAlert(uint32_t seq);
+
+    void applyConfig(const MotionConfig& cfg_);
+
+    const MotionConfig& config() const;
+    const MotionStatus& status() const;
+
+    // ---- LED policy / Motor enable linkage ----
+    void setLedModeAuto();
+    void setLedModeManual(bool on);
+    void setLedScheduleMinutes(uint16_t onStartMin, uint16_t onEndMin);
+    void setClockMinutes(uint16_t minutesSinceMidnight);
+
+    // Safety timeouts (can be tuned from UI/engineering later)
+    void setMotionStallPulseTimeoutMs(uint32_t ms);
+    void setMotionStallNoEndTimeoutMs(uint32_t ms);
 
     // ---- UI-facing request API (non-blocking) ----
-    void requestStart() { pending.start = true; }
-    void requestStop()  { pending.stop = true; }
-    void requestHome()  { pending.home = true; }
-    void requestRecalibrate() { pending.recalibrate = true; }
+    void requestStart();
+    void requestStop();
+    void requestHome();
+    void requestRecalibrate();
     // Engineering
-    void requestForceMoveLeft()  { pending.forceMoveLeft = true; }
-    void requestForceMoveRight() { pending.forceMoveRight = true; }
-    void requestDisableMotor()   { pending.stop = true; }
-    void requestInjectFault(MotionError e) { pending.injectFault = true; pending.faultToInject = e; }
-    void requestSetMaxSps(float sps) { pending.setMaxSps = true; pending.maxSps = sps; }
-    void requestSetAccel(float a)    { pending.setAccel = true; pending.accel = a; }
-    void requestSetDwell(uint32_t ms){ pending.setDwell = true; pending.dwellMs = ms; }
-    void requestSetRehomeEvery(uint32_t cycles){ pending.setRehome = true; pending.rehomeEvery = cycles; }
+    void requestForceMoveLeft();
+    void requestForceMoveRight();
+    void requestDisableMotor();
+    void requestInjectFault(MotionError e);
+    void requestSetMaxSps(float sps);
+    void requestSetAccel(float a);
+    void requestSetDwell(uint32_t ms);
+    void requestSetRehomeEvery(uint32_t cycles);
 
-    void tick() {
-        const uint32_t nowMs = millis();
-        const uint32_t nowUs = micros();
+    // ---- Test hooks (UI/Test menu) ----
+    void requestSimulateHallLeft(uint16_t activeMs);
+    void requestSimulateHallRight(uint16_t activeMs);
 
-        // Apply pending parameter requests at the top of the tick.
-        if (pending.setMaxSps) { cfg.maxSps = pending.maxSps; pending.setMaxSps = false; }
-        if (pending.setAccel)  { cfg.accel  = pending.accel;  pending.setAccel  = false; }
-        if (pending.setDwell)  { cfg.dwellMs= pending.dwellMs;pending.setDwell  = false; }
-        if (pending.setRehome) { cfg.rehomeEveryCycles = pending.rehomeEvery; pending.setRehome = false; }
+    void tick();
 
-        // Command requests (start/stop/home/recalibrate)
-        if (pending.stop) {
-            pending.stop = false;
-            enterStopped(nowMs);
-        }
+    // ---- Factory Auto Validation (default 10 cycles) ----
+    void startFactoryAutoTest(uint32_t hallIntervalMs = 5000, uint16_t targetCycles = 10);
+    void stopFactoryAutoTest();
+    bool isFactoryAutoTestRunning() const;
 
-        if (pending.home || pending.recalibrate) {
-            pending.home = false;
-            pending.recalibrate = false;
-            resetForHoming(true);  // 사용자 개입
-        }
+    uint16_t factoryAutoTargetCycles() const;
+    uint16_t factoryAutoStartCycles() const;
 
-        if (pending.injectFault) {
-            pending.injectFault = false;
-            fault(pending.faultToInject);
-            return;
-        }
+private:
+    // ---- internal sync helpers ----
+    void syncAlertStatus();
+    void syncFactoryStatus();
+    void pushFactoryLog(bool pass, uint8_t failCode, uint8_t failStep,
+                        uint32_t durationMs, uint32_t uptimeMs, uint32_t cycles);
 
-        if (pending.forceMoveLeft) {
-            pending.forceMoveLeft = false;
-            enterForcedMove(false);
-        }
-        if (pending.forceMoveRight) {
-            pending.forceMoveRight = false;
-            enterForcedMove(true);
-        }
+    // ---- internal helpers ----
+    static float maxf(float a, float b);
 
-        if (pending.start) {
-            pending.start = false;
-            // If stopped, start by homing. Otherwise ignore (already running).
-            if (st.state == MotionState::Stopped) resetForHoming(true);
-        }
+    void resetForHoming(bool userInitiated);
+    void enterStopped(uint32_t nowMs);
+    void fault(MotionError e);
 
-        st.hallRawL = (uint8_t)digitalRead(PIN_HALL_LEFT);
-        st.hallRawR = (uint8_t)digitalRead(PIN_HALL_RIGHT);
-        // Active-low hall modules: magnet close => LOW
-        st.hallL = (st.hallRawL == HIGH);
-        st.hallR = (st.hallRawR == HIGH);
+    void enterDwell(uint32_t nowMs, MotionState next);
+    void enterForcedMove(bool toRight);
 
-        if (st.hallL && st.hallR) {
-            fault(MotionError::BothLimitsActive);
-            return;
-        }
+    bool stepDue(uint32_t nowUs);
+    void doStep(bool forward, uint32_t nowMs, uint32_t nowUs);
+    bool isMovingState(MotionState s) const;
 
-        if (st.state == MotionState::Stopped) {
-            drv.enable(false);
-            st.currentSps = 0;
-            st.targetSps = 0;
-            return;
-        }
+    void updateHallHealth(uint32_t nowMs);
 
-        if (st.state == MotionState::RecoverWait) {
-            if (st.permanentFault) return;           // 🔒 영구 Fault면 자동 복구 금지
-            if (nowMs - stateEnterMs >= 2000) resetForHoming(false);
-            return;
-        }
+    bool evalLedShouldBeOn() const;
+    void applyLedAndMotorPolicy(bool ledShouldBeOn);
 
-        if (st.state == MotionState::Fault) {
-            drv.enable(false);
+    uint32_t deriveNoEndTimeoutMs() const;
 
-            if (st.recoverAttempts >= 3) {
-                // 영구 Fault 유지 (사용자 개입 or 리셋까지)
-                st.permanentFault = true;
-                return;
-            }
+    void rampSpeed(uint32_t nowMs, bool useDecel);
 
-            // Fault 화면 유지 시간 후 RecoverWait로 이동
-            if (nowMs - stateEnterMs >= 2000) {
-                st.state = MotionState::RecoverWait;
-                stateEnterMs = nowMs;
-            }
+    // ---- Auto Hall Toggle test (no real sensors needed) ----
+    void setAutoHallTest(bool enabled);
+    bool isAutoHallTestEnabled() const;
 
-            return;
-        }
-
-        if (st.state == MotionState::HomingLeft) {
-            if (nowMs - stateEnterMs > cfg.homingTimeoutMs) {
-                fault(MotionError::HomingTimeout);
-                return;
-            }
-        } else if (st.state == MotionState::CalibMoveRight) {
-            if (nowMs - stateEnterMs > cfg.travelTimeoutMs) {
-                fault(MotionError::CalibFailed);
-                return;
-            }
-        } else if (st.state == MotionState::MoveLeft || st.state == MotionState::MoveRight) {
-            uint32_t limitMs = cfg.travelTimeoutMs;
-            if (st.travelSteps > 0) {
-                float t = (float)st.travelSteps / maxf(cfg.minSps, 1.0f);
-                limitMs = (uint32_t)(t * 1000.0f) + 5000;
-            }
-            if (nowMs - stateEnterMs > limitMs) {
-                fault(MotionError::TravelTimeout);
-                return;
-            }
-        }
-
-        switch (st.state) {
-            case MotionState::HomingLeft:
-                drv.enable(true);
-                drv.setDir(false);
-                st.targetSps = cfg.minSps;
-                rampSpeed(nowMs, false);
-                if (stepDue(nowUs)) {
-                    doStep(false);
-                }
-                if (st.hallL) {
-                    st.pos = 0;
-                    st.currentSps = 0;
-                    st.targetSps = cfg.minSps;
-                    st.travelSteps = 0;
-                    st.state = MotionState::CalibMoveRight;
-                    stateEnterMs = nowMs;
-                    lastStepUs = nowUs;
-                    st.err = MotionError::None;
-                    calibSteps = 0;
-                    moveSteps = 0;
-                }
-                break;
-
-            case MotionState::CalibMoveRight:
-                drv.enable(true);
-                drv.setDir(true);
-                st.targetSps = cfg.maxSps;
-                rampSpeed(nowMs, false);
-                if (stepDue(nowUs)) {
-                    doStep(true);
-                    calibSteps++;
-                }
-                if (st.hallR) {
-                    st.travelSteps = calibSteps;
-                    calibSteps = 0;
-                    enterDwell(nowMs, MotionState::MoveLeft);
-                }
-                break;
-
-            case MotionState::MoveRight:
-                drv.enable(true);
-                drv.setDir(true);
-                st.targetSps = cfg.maxSps;
-                rampSpeed(nowMs, true);
-                if (stepDue(nowUs)) {
-                    doStep(true);
-                    moveSteps++;
-                }
-                if (st.hallR) {
-                    enterDwell(nowMs, MotionState::MoveLeft);
-                }
-                break;
-
-            case MotionState::MoveLeft:
-                drv.enable(true);
-                drv.setDir(false);
-                st.targetSps = cfg.maxSps;
-                rampSpeed(nowMs, true);
-                if (stepDue(nowUs)) {
-                    doStep(false);
-                    moveSteps++;
-                }
-                if (st.hallL) {
-                    if (lastWasRightEnd) {
-                        st.cycles++;
-                        lastWasRightEnd = false;
-                    }
-                    enterDwell(nowMs, MotionState::MoveRight);
-                }
-                break;
-
-            case MotionState::Dwell:
-                drv.enable(false);
-                st.currentSps = 0;
-                if (nowMs - stateEnterMs >= cfg.dwellMs) {
-                    if (st.cycles > 0 && (st.cycles % cfg.rehomeEveryCycles) == 0) {
-                        resetForHoming(true);
-                        return;
-                    }
-                    st.state = nextAfterDwell;
-                    stateEnterMs = nowMs;
-                    moveSteps = 0;
-                    lastStepUs = nowUs;
-                    if (nextAfterDwell == MotionState::MoveLeft) lastWasRightEnd = true;
-                }
-                break;
-
-            default:
-                break;
-        }
-    }
+    void setAutoHallIntervalMs(uint32_t intervalMs);   // e.g. 1000~10000
+    uint32_t autoHallIntervalMs() const;    
 
 private:
     MotionConfig cfg;
     StepperHal_Drv8825 drv;
     MotionStatus st;
+
+    struct {
+        uint32_t seq = 0;
+        uint8_t head = 0;
+        uint8_t count = 0;
+        uint8_t codes[5] = {0};
+        uint32_t uptimeSec[5] = {0};
+        bool pending = false;
+        uint8_t pendingCode = 0;
+        AlertCallback cb = nullptr;
+    } alerts;
+
+    struct {
+        uint32_t seq = 0;
+        bool lastPass = false;
+        uint8_t failCode = 0;
+        uint8_t failStep = 0;
+        uint32_t durationMs = 0;
+        uint32_t uptimeSec = 0;
+        uint32_t passCount = 0;
+        uint32_t failCount = 0;
+
+        // history log (ring, max 8)
+        uint8_t  logHead = 0;
+        uint8_t  logCount = 0;
+        uint8_t  logPass[8] = {0};
+        uint8_t  logFailCode[8] = {0};
+        uint8_t  logFailStep[8] = {0};
+        uint16_t logDurationSec[8] = {0};
+        uint32_t logUptimeSec[8] = {0};
+        uint32_t logCycles[8] = {0};
+
+        FactoryCallback cb = nullptr;
+    } factory;
+
+    struct LedPolicy {
+        LedMode mode = LedMode::Auto;
+        bool manualOn = true;
+        uint16_t onStartMin = 8 * 60;   // 08:00
+        uint16_t onEndMin   = 20 * 60;  // 20:00
+        bool clockValid = false;
+        uint16_t clockMin = 0;
+        bool lastAppliedOn = false;
+    } led;
+
+    struct SafetyPolicy {
+        // Pulse stall: if moving state but no step pulse for this long => MotionStall
+        uint32_t pulseStallTimeoutMs = 800;
+        // End-sensor liveness: if no hall hit for too long while active => MotionStall
+        // 0 means auto-derive from travel + dwell
+        uint32_t noEndTimeoutMs = 0;
+        // Both sensors active debounce
+        uint32_t bothActiveDebounceMs = 20;
+
+        uint32_t lastStepPulseMs = 0;
+        uint32_t lastEndHitMs = 0;
+        bool lastHallL = false;
+        bool lastHallR = false;
+    } safety;
 
     uint32_t stateEnterMs = 0;
     uint32_t lastStepUs = 0;
@@ -288,7 +279,19 @@ private:
     uint32_t moveSteps = 0;
     bool lastWasRightEnd = false;
 
+    uint32_t bothActiveSinceMs = 0;
+
     MotionState nextAfterDwell = MotionState::MoveRight;
+
+    struct SimHall {
+        bool leftActive = false;
+        bool rightActive = false;
+        uint32_t leftUntilMs = 0;
+        uint32_t rightUntilMs = 0;
+    } sim;
+
+    // UI/Test mute window (ms). Used to suppress popups/alerts while scripted validation is running.
+    uint32_t uiMuteUntilMs = 0;
 
     struct Pending {
         bool start = false;
@@ -309,129 +312,19 @@ private:
         uint32_t rehomeEvery = 0;
     } pending;
 
-    static float maxf(float a, float b) { return a > b ? a : b; }
-
-    void resetForHoming(bool userInitiated) {
-        drv.enable(true);
-        st.state = MotionState::HomingLeft;
-        st.err = MotionError::None;
-        st.currentSps = 0;
-        st.targetSps = cfg.minSps;
-        st.pos = 0;
-        stateEnterMs = millis();
-        lastStepUs = micros();
-        lastRampMs = stateEnterMs;
-        calibSteps = 0;
-        moveSteps = 0;
-        lastWasRightEnd = false;
-        st.travelSteps = 0;
-
-        if (userInitiated) {
-            st.recoverAttempts = 0;
-            st.permanentFault = false;
-        }
-    }
-
-    void enterStopped(uint32_t nowMs) {
-        st.state = MotionState::Stopped;
-        st.currentSps = 0;
-        st.targetSps = 0;
-        drv.enable(false);
-        stateEnterMs = nowMs;
-    }
-
-    void fault(MotionError e) {
-        const uint32_t now = millis();
-
-        // 최초 Fault 진입만 카운트 (Fault 상태에서 fault() 다시 호출되면 누적 방지)
-        if (st.state != MotionState::Fault) {
-            st.recoverAttempts++;             // retryCount (1..)
-            st.faultTotal++;                  // 누적 fault 횟수
-            st.lastErr = e;                   // 마지막 fault 기록
-            st.lastFaultUptimeMs = now;       // timestamp
-        }
-
-        st.state = MotionState::Fault;
-        st.err = e;
-        st.currentSps = 0;
-        st.targetSps = 0;
-        drv.enable(false);
-        stateEnterMs = now;
-
-        // 3회 이상이면 영구 Fault 플래그
-        st.permanentFault = (st.recoverAttempts >= 3);
-    }
-
-    void enterDwell(uint32_t nowMs, MotionState next) {
-        st.state = MotionState::Dwell;
-        nextAfterDwell = next;
-        stateEnterMs = nowMs;
-        st.currentSps = 0;
-        st.targetSps = 0;
-        drv.enable(false);
-        moveSteps = 0;
-    }
-
-    void enterForcedMove(bool toRight) {
-        // Engineering-only: move until a hall triggers or timeout.
-        // We reuse MoveLeft/MoveRight states with travelSteps=0 so decel logic is disabled.
-        drv.enable(true);
-        st.err = MotionError::None;
-        st.state = toRight ? MotionState::MoveRight : MotionState::MoveLeft;
-        st.targetSps = cfg.minSps;
-        st.currentSps = cfg.minSps;
-        st.travelSteps = 0;
-        moveSteps = 0;
-        stateEnterMs = millis();
-        lastStepUs = micros();
-        lastRampMs = stateEnterMs;
-    }
-
-    bool stepDue(uint32_t nowUs) {
-        float sps = maxf(st.currentSps, 1.0f);
-        uint32_t intervalUs = (uint32_t)(1000000.0f / sps);
-        return (uint32_t)(nowUs - lastStepUs) >= intervalUs;
-    }
-
-    void doStep(bool forward) {
-        drv.stepPulse();
-        lastStepUs = micros();
-        st.pos += forward ? 1 : -1;
-    }
-
-    void rampSpeed(uint32_t nowMs, bool useDecel) {
-        uint32_t dtMs = nowMs - lastRampMs;
-        if (dtMs == 0) return;
-        lastRampMs = nowMs;
-
-        float dt = (float)dtMs / 1000.0f;
-        float v = st.currentSps;
-        float vmax = cfg.maxSps;
-        float vmin = cfg.minSps;
-        float a = maxf(cfg.accel, 1.0f);
-
-        float desired = st.targetSps;
-
-        if (useDecel && st.travelSteps > 0) {
-            uint32_t traveled = moveSteps;
-            if (traveled > st.travelSteps) traveled = st.travelSteps;
-            uint32_t remaining = st.travelSteps - traveled;
-
-            float brake = (v * v) / (2.0f * a);
-            if ((float)remaining <= brake) desired = vmin;
-            else desired = vmax;
-        }
-
-        if (v < desired) {
-            v += a * dt;
-            if (v > desired) v = desired;
-        } else if (v > desired) {
-            v -= a * dt;
-            if (v < desired) v = desired;
-        }
-
-        if (v < vmin) v = vmin;
-        if (v > vmax) v = vmax;
-        st.currentSps = v;
-    }
+    struct AutoHallTest {
+        bool enabled = false;
+        uint32_t intervalMs = 3000;     // default 3s
+        uint32_t pulseMs = 120;         // how long to assert hall "true"
+        uint32_t lastToggleMs = 0;
+        bool nextLeft = true;
+    } autoHall;  
+    
+    struct FactoryAutoTest {
+        bool running = false;
+        uint16_t targetCycles = 10;
+        uint16_t startCycles = 0;
+        uint32_t startMs = 0;
+        uint8_t failStep = 1;
+    } fauto;
 };

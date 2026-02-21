@@ -9,6 +9,7 @@ enum class Kind : uint8_t {
     Tel = 0x02,
     Ack = 0x03,
     Err = 0x04,
+    Evt = 0x05,
 };
 
 struct Envelope {
