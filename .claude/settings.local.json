@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Remove-Item -Force \"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\IPresetPolicy.h\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Force \"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\ChickenPreset.h\",\"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\ChickenPreset.cpp\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Force \"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\DuckPreset.h\",\"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\DuckPreset.cpp\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Force \"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\GoosePreset.h\",\"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\GoosePreset.cpp\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Force \"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\QuailPreset.h\",\"d:\\\\_MyProjects\\\\GrowBed-RP2040\\\\src\\\\policy\\\\QuailPreset.cpp\" -ErrorAction SilentlyContinue)"
+    ]
+  }
+}
