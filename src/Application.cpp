@@ -17,9 +17,11 @@ Application::Application()
       }),
       m_leftTouch(devices::HallSensorDriver::Config{
           .pin = config::Pin::STEP_SENSOR_L,
+          .activeLow = false,
       }),
       m_rightTouch(devices::HallSensorDriver::Config{
           .pin = config::Pin::STEP_SENSOR_R,
+          .activeLow = false,
       }),
       m_encoder(config::Pin::ENC_A, config::Pin::ENC_B, config::Pin::ENC_BTN),
       m_rs485(Serial1),
@@ -42,7 +44,7 @@ Application::Application()
       m_appCtrl(m_state, m_settings, m_session,
                 m_nvs, m_heater, m_humidifier, m_growLightModule, m_growTrayModule, m_fan),
 
-      m_uiCtrl(m_uiModel, m_state, m_appCtrl, m_provisioning, m_encoder),
+      m_uiCtrl(m_uiModel, m_state, m_appCtrl, m_provisioning, m_encoder, m_rtc),
       m_renderer(m_uiModel, m_display)
 {
 }
@@ -68,7 +70,7 @@ void Application::init()
         Serial.println("[App] I2C init failed");
     }
 
-    if (m_rtc.init()) {
+    if (m_rtc.init(m_nvs)) {
         if (m_rtc.isValid()) m_rtc.syncSystemTime();
         else Serial.println("[App] RTC time invalid ??set via menu");
     }

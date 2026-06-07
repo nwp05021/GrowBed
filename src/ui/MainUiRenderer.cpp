@@ -57,6 +57,7 @@ namespace
             case UiScreen::Menu:          return "Menu";
             case UiScreen::StartDate:     return "Start Grow";
             case UiScreen::Preset:        return "Plant Policy";
+            case UiScreen::RtcSetup:      return "RTC Setup";
             case UiScreen::Manual:        return "Grow Tray Test";
             case UiScreen::Rs485Test:     return "RS485 Test";
             case UiScreen::System:        return "System";
@@ -66,7 +67,7 @@ namespace
         }
         switch (model.activePage) {
             case 1:  return "Status";
-            case 2:  return "System";
+            case 2:  return "Alarms";
             default: return "GrowBed";
         }
     }
@@ -98,6 +99,8 @@ namespace
         hashValue(h, model.humiAlarm);
         hashValue(h, model.tempSensorFault);
         hashValue(h, model.humiSensorFault);
+        hashValue(h, model.tempSensorWarning);
+        hashValue(h, model.humiSensorWarning);
         return h;
     }
 
@@ -121,6 +124,12 @@ namespace
         hashValue(h, model.activePage);
         hashValue(h, model.sessionActive);
         hashValue(h, model.safeMode);
+        hashValue(h, model.tempAlarm);
+        hashValue(h, model.humiAlarm);
+        hashValue(h, model.tempSensorFault);
+        hashValue(h, model.humiSensorFault);
+        hashValue(h, model.tempSensorWarning);
+        hashValue(h, model.humiSensorWarning);
         hashValue(h, q10(model.displayTempC));
         hashValue(h, q1(model.displayHumidPct));
         hashValue(h, q10(model.targetTempC));
@@ -156,6 +165,14 @@ namespace
         hashValue(h, model.editBatchYear);
         hashValue(h, model.editBatchMonth);
         hashValue(h, model.editBatchDay);
+        hashValue(h, model.rtcAvailable);
+        hashValue(h, model.rtcSaveSucceeded);
+        hashValue(h, model.editRtcYear);
+        hashValue(h, model.editRtcMonth);
+        hashValue(h, model.editRtcDay);
+        hashValue(h, model.editRtcHour);
+        hashValue(h, model.editRtcMinute);
+        hashValue(h, model.editRtcSecond);
         hashValue(h, model.factoryProgressPct);
         hashValue(h, model.factoryReady);
         hashString(h, model.actionMessage);
@@ -223,6 +240,7 @@ void MainUiRenderer::render(uint32_t nowMs)
             case UiScreen::Menu:          m_pageMenu.render(nowMs);       break;
             case UiScreen::StartDate:     m_pageStartDate.render(nowMs);  break;
             case UiScreen::Preset:        m_pagePreset.render(nowMs);     break;
+            case UiScreen::RtcSetup:      m_pageRtcSetup.render(nowMs);   break;
             case UiScreen::Manual:        m_pageGrowTrayTest.render(nowMs); break;
             case UiScreen::Rs485Test:     m_pageRs485Test.render(nowMs);  break;
             case UiScreen::RebootConfirm:
@@ -311,6 +329,7 @@ void MainUiRenderer::renderFooter(uint32_t nowMs)
     } else {
         const char* hint = "Turn: move  Click: select  Hold: back";
         if (m_model.screen == UiScreen::Manual) hint = "Turn: select/Hz  Click: edit/toggle  Hold: exit";
+        if (m_model.screen == UiScreen::RtcSetup) hint = "Turn: move/value  Click: edit/save  Hold: back";
         if (m_model.screen == UiScreen::Rs485Test) hint = "Click: run  Hold: manual";
         if (m_model.screen == UiScreen::FactoryReset) hint = "Hold 10 sec: run  Hold: back";
         m_display.setTextSize(1);

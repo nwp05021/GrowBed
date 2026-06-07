@@ -39,9 +39,8 @@ namespace growbed::config
         static constexpr int STEP_STEP      = 2;  // STEP 펄스
         static constexpr int STEP_DIR       = 3;  // DIR 
         static constexpr int STEP_EN        = 6;  // ENABLE (LOW=활성, A4988/DRV8825 공통)
-        static constexpr int STEP_SENSOR_L  = 8;  // 
-        static constexpr int STEP_SENSOR_R  = 9;  // 
-        // MS1/MS2/MS3 마이크로스탭
+        static constexpr int STEP_SENSOR_R  = 8; // 
+        static constexpr int STEP_SENSOR_L  = 9; // 
 
         // CDS GL5537 조도센서
         static constexpr int CDS_GL5537     = 26;  // ADC 
@@ -50,3 +49,4 @@ namespace growbed::config
         static constexpr int LED_PWM        = 23;  // PWM 밝기
     };
 }
+

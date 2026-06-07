@@ -5,6 +5,7 @@
 #include "domain/PlantSpecies.h"
 #include "app/AppController.h"
 #include "devices/Ec11Encoder.h"
+#include "devices/RtcDriver.h"
 #include "infra/ProvisioningManager.h"
 #include <cstddef>
 #include <cstdint>
@@ -21,9 +22,10 @@ namespace growbed::ui
                      const domain::RuntimeState& state,
                      app::AppController&         ctrl,
                      infra::ProvisioningManager& provisioning,
-                     devices::Ec11Encoder&       encoder)
+                     devices::Ec11Encoder&       encoder,
+                     devices::RtcDriver&         rtc)
             : m_model(model), m_state(state), m_ctrl(ctrl),
-              m_provisioning(provisioning), m_encoder(encoder)
+              m_provisioning(provisioning), m_encoder(encoder), m_rtc(rtc)
         {
             m_model.activePage = 0;
         }
@@ -47,6 +49,9 @@ namespace growbed::ui
         void startDateClick();
         void presetDelta(int d);
         void presetClick();
+        void rtcSetupDelta(int d);
+        void rtcSetupClick();
+        void initRtcFields();
         void rebootClick();
         void factoryTick(uint32_t nowMs);
         void startSessionFromPreset(domain::PlantSpecies species);
@@ -60,6 +65,7 @@ namespace growbed::ui
         app::AppController&         m_ctrl;
         infra::ProvisioningManager& m_provisioning;
         devices::Ec11Encoder&       m_encoder;
+        devices::RtcDriver&         m_rtc;
 
         uint32_t m_lastSyncMs       = 0;
         uint32_t m_factoryStartedMs = 0;

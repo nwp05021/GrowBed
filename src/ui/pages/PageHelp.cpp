@@ -4,48 +4,69 @@
 
 namespace growbed::ui::pages
 {
-    void PageHelp::render(uint32_t nowMs)
+    void PageHelp::render(uint32_t)
     {
-        char buf[48];
-        const int startY  = 44;
-        const int lineGap = 26;
+        char detail[48];
+        int row = 0;
 
+        auto drawAlarm = [&](const char* title, const char* value, uint32_t color) {
+            constexpr int kBoxY = 30;
+            constexpr int kBoxHeight = 38;
+            constexpr int kRowPitch = 40;
+            const int y = kBoxY + row * kRowPitch;
+
+            m_display.fillRect(12, y, 296, kBoxHeight, Color::kPanel);
+            m_display.drawRect(12, y, 296, kBoxHeight, color);
+            m_display.setTextSize(1);
+            m_display.setTextColor(color, Color::kPanel);
+            m_display.drawText(22, y + 3, title);
+            m_display.setTextColor(Color::kText, Color::kPanel);
+            m_display.drawText(22, y + 20, value);
+            ++row;
+        };
+
+        if (m_model.tempAlarm) {
+            const char* direction =
+                m_model.displayTempC >= m_model.targetTempC ? "HIGH" : "LOW";
+            std::snprintf(detail, sizeof(detail), "%s  Now %.1f C / Target %.1f C",
+                          direction, m_model.displayTempC, m_model.targetTempC);
+            drawAlarm("Temperature alarm", detail, Color::kDanger);
+        }
+
+        if (m_model.humiAlarm) {
+            const char* direction =
+                m_model.displayHumidPct >= m_model.targetHumidPct ? "HIGH" : "LOW";
+            std::snprintf(detail, sizeof(detail), "%s  Now %.0f %% / Target %.0f %%",
+                          direction, m_model.displayHumidPct, m_model.targetHumidPct);
+            drawAlarm("Humidity alarm", detail, Color::kDanger);
+        }
+
+        if (m_model.tempSensorFault) {
+            drawAlarm("Temperature sensor", "FAULT: no valid measurement", Color::kDanger);
+        } else if (m_model.tempSensorWarning) {
+            drawAlarm("Temperature sensor", "WARNING: latest read failed", Color::kWarn);
+        }
+
+        if (m_model.humiSensorFault) {
+            drawAlarm("Humidity sensor", "FAULT: no valid measurement", Color::kDanger);
+        } else if (m_model.humiSensorWarning) {
+            drawAlarm("Humidity sensor", "WARNING: latest read failed", Color::kWarn);
+        }
+
+        if (row == 0) {
+            m_display.fillRect(24, 72, 272, 64, Color::kPanel);
+            m_display.drawRect(24, 72, 272, 64, Color::kOnIcon);
+            m_display.setTextSize(1);
+            m_display.setTextColor(Color::kOnIcon, Color::kPanel);
+            m_display.drawText(104, 88, "No active alarms");
+            m_display.setTextColor(Color::kTextDim, Color::kPanel);
+            m_display.drawText(90, 112, "All monitored values are normal");
+        }
+
+        std::snprintf(detail, sizeof(detail), "Boot #%u   FW %s",
+                      static_cast<unsigned>(m_model.bootCount), m_model.fwVersion);
         m_display.setTextSize(1);
-
-        m_display.setTextColor(Color::kText, Color::kBg);
-        m_display.drawText(16, startY, "?úÏä§???ïÎ≥¥");
-
-        m_display.drawLine(16, startY + lineGap - 4, 304, startY + lineGap - 4, Color::kDivider);
-
-        // Í∞Ä???úÍ∞Ñ
-        uint32_t totalSec = m_model.uptimeMs / 1000U;
-        uint32_t hr  = (totalSec / 3600U);
-        uint32_t min = (totalSec % 3600U) / 60U;
-        uint32_t sec = totalSec % 60U;
-        std::snprintf(buf, sizeof(buf), "%02u:%02u:%02u", hr, min, sec);
         m_display.setTextColor(Color::kTextDim, Color::kBg);
-        m_display.drawText(16, startY + lineGap,       "Í∞Ä???úÍ∞Ñ");
-        m_display.setTextColor(Color::kText, Color::kBg);
-        m_display.drawText(160, startY + lineGap, buf);
-
-        // Î∂Ä???üÏàò
-        std::snprintf(buf, sizeof(buf), "#%u", static_cast<unsigned>(m_model.bootCount));
-        m_display.setTextColor(Color::kTextDim, Color::kBg);
-        m_display.drawText(16, startY + lineGap * 2,  "Î∂Ä???üÏàò");
-        m_display.setTextColor(Color::kText, Color::kBg);
-        m_display.drawText(160, startY + lineGap * 2, buf);
-
-        // ?ºÏÑú ?ÅÌÉú
-        m_display.setTextColor(Color::kTextDim, Color::kBg);
-        m_display.drawText(16, startY + lineGap * 3,  "?ºÏÑú ?ÅÌÉú");
-        bool sensorOk = !m_model.tempSensorFault && !m_model.humiSensorFault;
-        m_display.setTextColor(sensorOk ? Color::kOnIcon : Color::kDanger, Color::kBg);
-        m_display.drawText(160, startY + lineGap * 3, sensorOk ? "?ïÏÉÅ" : "?§Î•ò");
-
-        // FW Î≤ÑÏ†Ñ
-        m_display.setTextColor(Color::kTextDim, Color::kBg);
-        m_display.drawText(16, startY + lineGap * 4,  "FW Î≤ÑÏ†Ñ");
-        m_display.setTextColor(Color::kText, Color::kBg);
-        m_display.drawText(160, startY + lineGap * 4, m_model.fwVersion);
+        m_display.drawText(16, 198, detail);
     }
 }

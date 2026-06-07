@@ -11,7 +11,9 @@ bool GrowTrayModule::init()
     const bool rightOk = m_rightTouch.init();
     const bool stepperOk = m_stepper.init();
 
-    stopMotion();
+    m_stepper.setSpeed(0U);
+    m_stepper.disable();
+    m_on = false;
 
     Serial.printf("[GrowTray] init left=%u right=%u stepper=%u\n",
                   leftOk ? 1U : 0U,
@@ -23,15 +25,19 @@ bool GrowTrayModule::init()
 void GrowTrayModule::setOn(bool on)
 {
     if (m_on == on) return;
-
     m_on = on;
-    if (!m_on) {
-        stopMotion();
-        return;
-    }
 
-    updateLastDirFromTouches();
-    startMotion(millis());
+    if (m_on) {
+        applyDetectedDirection();
+        m_stepper.enable();
+        m_currentStepHz = m_stepHz;
+        m_stepper.setSpeed(m_stepHz);
+    } else {
+        m_directionState = DirectionState::Steady;
+        m_currentStepHz = 0U;
+        m_stepper.setSpeed(0U);
+        m_stepper.disable();
+    }
 }
 
 void GrowTrayModule::setStepHz(uint32_t hz)
@@ -39,21 +45,16 @@ void GrowTrayModule::setStepHz(uint32_t hz)
     if (hz < kMinStepHz) hz = kMinStepHz;
     if (hz > kMaxStepHz) hz = kMaxStepHz;
 
-    m_targetSpeedHz = hz;
-    if (m_currentSpeedHz > m_targetSpeedHz) {
-        m_currentSpeedHz = m_targetSpeedHz;
-        if (m_state != State::Idle && m_state != State::StopPause) {
-            m_stepper.setSpeed(m_currentSpeedHz);
-        }
+    m_stepHz = hz;
+    if (m_on && m_directionState == DirectionState::Steady) {
+        m_currentStepHz = m_stepHz;
+        m_stepper.setSpeed(m_currentStepHz);
     }
 }
 
 void GrowTrayModule::setCurrentDir(bool dir)
 {
-    m_currDir = dir;
-    m_motionStartMs = millis();
-    m_endTouchArmed = false;
-    m_stepper.setDirection(m_currDir);
+    requestDirection(dir);
 }
 
 void GrowTrayModule::tick(uint32_t nowMs)
@@ -61,129 +62,78 @@ void GrowTrayModule::tick(uint32_t nowMs)
     m_leftTouch.tick(nowMs);
     m_rightTouch.tick(nowMs);
 
-    if (!m_on) return;
+    const bool leftTouched = m_leftTouch.rose();
+    const bool rightTouched = m_rightTouch.rose();
+    m_leftTouch.fell();
+    m_rightTouch.fell();
 
-    if (m_state == State::Idle) {
-        updateLastDirFromTouches();
-        startMotion(nowMs);
+    if (m_on) {
+        if (leftTouched) {
+            requestDirection(false);
+        } else if (rightTouched) {
+            requestDirection(true);
+        }
+        updateDirectionChange(nowMs);
+    }
+
+}
+
+void GrowTrayModule::applyDetectedDirection()
+{
+    if (m_leftTouch.isDetected()) {
+        requestDirection(false);
+    } else if (m_rightTouch.isDetected()) {
+        requestDirection(true);
+    }
+}
+
+void GrowTrayModule::requestDirection(bool dir)
+{
+    if (dir == m_stepper.dirForward()) return;
+    if (m_directionState != DirectionState::Steady && dir == m_requestedDir) return;
+
+    m_requestedDir = dir;
+
+    if (!m_on || m_currentStepHz == 0U) {
+        m_stepper.setDirection(dir);
+        m_directionState = DirectionState::Steady;
         return;
     }
 
-    if (m_state == State::StopPause) {
-        if (nowMs - m_stopPauseStartMs >= kStopPauseMs) {
-            updateLastDirFromTouches();
-            startMotion(nowMs);
+    m_directionState = DirectionState::Decelerating;
+    m_lastRampMs = millis();
+}
+
+void GrowTrayModule::updateDirectionChange(uint32_t nowMs)
+{
+    if (m_directionState == DirectionState::Steady) return;
+    if (nowMs - m_lastRampMs < kRampIntervalMs) return;
+    m_lastRampMs = nowMs;
+
+    if (m_directionState == DirectionState::Decelerating) {
+        if (m_currentStepHz <= kRampStepHz) {
+            m_currentStepHz = 0U;
+            m_stepper.setSpeed(0U);
+            m_stepper.setDirection(m_requestedDir);
+            m_currentStepHz = m_stepHz < kRampStepHz ? m_stepHz : kRampStepHz;
+            m_stepper.setSpeed(m_currentStepHz);
+            m_directionState = m_currentStepHz >= m_stepHz
+                ? DirectionState::Steady
+                : DirectionState::Accelerating;
+        } else {
+            m_currentStepHz -= kRampStepHz;
+            m_stepper.setSpeed(m_currentStepHz);
         }
         return;
     }
 
-    if (endTouchDetected(nowMs) && m_state != State::Decel) {
-        updateLastDirFromTouches();
-        m_state = State::Decel;
-    }
-
-    m_stepper.tick();
-    if (!stepOccurred()) return;
-
-    if (m_state == State::Accel) {
-        updateAccel();
-    } else if (m_state == State::Decel) {
-        updateDecel(nowMs);
-    }
-}
-
-void GrowTrayModule::updateLastDirFromTouches()
-{
-    const bool left = m_leftTouch.isDetected();
-    const bool right = m_rightTouch.isDetected();
-
-    if (left) {
-        m_currDir = false;
-    } else if (right) {
-        m_currDir = true;
-    }
-}
-
-void GrowTrayModule::startMotion(uint32_t nowMs)
-{
-    m_currentSpeedHz = kMinStepHz;
-    m_state = State::Accel;
-    m_lastPosition = m_stepper.position();
-    m_motionStartMs = nowMs;
-    m_endTouchArmed = false;
-
-    m_stepper.enable();
-    m_stepper.setDirection(m_currDir);
-    m_stepper.setSpeed(m_currentSpeedHz);
-
-    Serial.printf("[GrowTray] move dir=%u\n", m_currDir ? 1U : 0U);
-}
-
-void GrowTrayModule::stopMotion()
-{
-    m_stepper.setSpeed(0U);
-    m_stepper.disable();
-    m_currentSpeedHz = 0U;
-    m_state = State::Idle;
-    m_endTouchArmed = false;
-    m_lastPosition = m_stepper.position();
-}
-
-void GrowTrayModule::beginStopPause(uint32_t nowMs)
-{
-    m_stepper.setSpeed(0U);
-    m_currentSpeedHz = 0U;
-    m_stopPauseStartMs = nowMs;
-    m_state = State::StopPause;
-    Serial.printf("[GrowTray] end stop, pause=%lums\n",
-                  static_cast<unsigned long>(kStopPauseMs));
-}
-
-bool GrowTrayModule::endTouchDetected(uint32_t nowMs)
-{
-    const bool targetTouch = m_currDir ? m_leftTouch.isDetected() : m_rightTouch.isDetected();
-
-    if (nowMs - m_motionStartMs < kEndTouchArmDelayMs) {
-        return false;
-    }
-
-    if (!targetTouch) {
-        m_endTouchArmed = true;
-        return false;
-    }
-
-    return m_endTouchArmed;
-}
-
-bool GrowTrayModule::stepOccurred()
-{
-    const int32_t position = m_stepper.position();
-    if (position == m_lastPosition) return false;
-
-    m_lastPosition = position;
-    return true;
-}
-
-void GrowTrayModule::updateAccel()
-{
-    if (m_currentSpeedHz + kAccelHzPerStep >= m_targetSpeedHz) {
-        m_currentSpeedHz = m_targetSpeedHz;
-        m_state = State::Cruise;
+    if (m_currentStepHz + kRampStepHz >= m_stepHz) {
+        m_currentStepHz = m_stepHz;
+        m_directionState = DirectionState::Steady;
     } else {
-        m_currentSpeedHz += kAccelHzPerStep;
+        m_currentStepHz += kRampStepHz;
     }
-    m_stepper.setSpeed(m_currentSpeedHz);
-}
-
-void GrowTrayModule::updateDecel(uint32_t nowMs)
-{
-    if (m_currentSpeedHz <= kMinStepHz + kAccelHzPerStep) {
-        beginStopPause(nowMs);
-        return;
-    }
-
-    m_currentSpeedHz -= kAccelHzPerStep;
-    m_stepper.setSpeed(m_currentSpeedHz);
+    m_stepper.setSpeed(m_currentStepHz);
 }
 
 } // namespace growbed::modules

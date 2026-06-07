@@ -13,6 +13,7 @@
 #include "ui/pages/PageStartDate.h"
 #include "ui/pages/PageHelp.h"
 #include "ui/pages/PagePreset.h"
+#include "ui/pages/PageRtcSetup.h"
 #include "ui/pages/PageRs485Test.h"
 #include "ui/pages/PageFactoryReset.h"
 
@@ -32,6 +33,7 @@ namespace growbed::ui
               m_pageStartDate(model, display),
               m_pageHelp(model, display),
               m_pagePreset(model, display),
+              m_pageRtcSetup(model, display),
               m_pageFactoryReset(model, display)
             {}
 
@@ -49,6 +51,7 @@ namespace growbed::ui
         pages::PageStartDate   m_pageStartDate;
         pages::PageHelp        m_pageHelp;
         pages::PagePreset      m_pagePreset;
+        pages::PageRtcSetup    m_pageRtcSetup;
         pages::PageFactoryReset m_pageFactoryReset;
 
         uint32_t m_lastRenderMs   = 0;

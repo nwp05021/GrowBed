@@ -12,6 +12,7 @@ namespace growbed::ui
         Menu,
         StartDate,
         Preset,
+        RtcSetup,
         Manual,
         Rs485Test,
         RebootConfirm,
@@ -28,6 +29,7 @@ namespace growbed::ui
     static constexpr MenuItem kMainMenuItems[] = {
         { "Start Grow",    "Enter date",   UiScreen::StartDate     },
         { "Plant Policy",  "Select target", UiScreen::Preset        },
+        { "RTC Setup",     "Date / time",  UiScreen::RtcSetup      },
         { "Grow Tray Test", "Tray",         UiScreen::Manual        },
         { "RS485 Test",    "PING test",     UiScreen::Rs485Test     },
         { "Reboot",        "System",        UiScreen::RebootConfirm },
@@ -91,6 +93,15 @@ namespace growbed::ui
         uint16_t editBatchYear      = 2026;
         uint8_t  editBatchMonth     = 1;
         uint8_t  editBatchDay       = 1;
+
+        bool     rtcAvailable       = false;
+        bool     rtcSaveSucceeded   = false;
+        uint16_t editRtcYear        = 2026;
+        uint8_t  editRtcMonth       = 1;
+        uint8_t  editRtcDay         = 1;
+        uint8_t  editRtcHour        = 0;
+        uint8_t  editRtcMinute      = 0;
+        uint8_t  editRtcSecond      = 0;
 
         bool     rs485Ready         = false;
         bool     rs485TxActive      = false;

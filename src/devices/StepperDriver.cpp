@@ -1,17 +1,24 @@
 #include "devices/StepperDriver.h"
 
+#include <hardware/clocks.h>
+#include <hardware/pwm.h>
+
 namespace growbed::devices
 {
 
 bool StepperDriver::init()
 {
     if (m_cfg.pinStep < 0 || m_cfg.pinDir < 0) {
-        Serial.println("[Stepper] pinStep / pinDir ?¤ì • ?¤ë¥˜");
+        Serial.println("[Stepper] invalid STEP/DIR pin");
         return false;
     }
 
-    pinMode(m_cfg.pinStep, OUTPUT);
-    digitalWrite(m_cfg.pinStep, LOW);
+    m_pwmSlice = pwm_gpio_to_slice_num(m_cfg.pinStep);
+    m_pwmChannel = pwm_gpio_to_channel(m_cfg.pinStep);
+
+    gpio_set_function(m_cfg.pinStep, GPIO_FUNC_PWM);
+    pwm_set_chan_level(m_pwmSlice, m_pwmChannel, 0U);
+    pwm_set_enabled(m_pwmSlice, false);
 
     pinMode(m_cfg.pinDir, OUTPUT);
     setDirection(true);
@@ -23,32 +30,36 @@ bool StepperDriver::init()
         m_enabled = true;
     }
 
-    Serial.println("[Stepper] ì´ˆê¸°???„ë£Œ");
+    m_initialized = true;
+    updatePulseOutput();
+    Serial.printf("[Stepper] hardware PWM initialized (slice=%u channel=%u)\n",
+                  m_pwmSlice, m_pwmChannel);
     return true;
 }
 
 void StepperDriver::enable()
 {
-    if (m_cfg.pinEnable >= 0)
+    if (m_cfg.pinEnable >= 0) {
         digitalWrite(m_cfg.pinEnable, m_cfg.invertEnable ? LOW : HIGH);
+    }
     m_enabled = true;
+    updatePulseOutput();
 }
 
 void StepperDriver::disable()
 {
-    if (m_cfg.pinEnable >= 0)
-        digitalWrite(m_cfg.pinEnable, m_cfg.invertEnable ? HIGH : LOW);
     m_enabled = false;
+    updatePulseOutput();
+
+    if (m_cfg.pinEnable >= 0) {
+        digitalWrite(m_cfg.pinEnable, m_cfg.invertEnable ? HIGH : LOW);
+    }
 }
 
 void StepperDriver::setSpeed(uint32_t hz)
 {
-    bool wasZero  = (m_speedHz == 0U);
-    m_speedHz     = hz;
-    m_intervalUs  = (hz > 0U) ? (1'000'000U / hz) : 0U;
-    // ?•ì? ???¬ì‹œ?????€?´ë¨¸ ì´ˆê¸°??(?¤ëž˜??nextStepUs ë¡??¸í•œ ì¦‰ë°œ ë°©ì?)
-    if (hz > 0U && wasZero)
-        m_nextStepUs = micros();
+    m_speedHz = hz;
+    updatePulseOutput();
 }
 
 void StepperDriver::setDirection(bool forward)
@@ -57,31 +68,32 @@ void StepperDriver::setDirection(bool forward)
     digitalWrite(m_cfg.pinDir, (forward ^ m_cfg.invertDir) ? HIGH : LOW);
 }
 
-void StepperDriver::doStep()
+void StepperDriver::updatePulseOutput()
 {
-    digitalWrite(m_cfg.pinStep, HIGH);
-    delayMicroseconds(m_cfg.stepPulseUs);
-    digitalWrite(m_cfg.pinStep, LOW);
-    m_position += m_dirForward ? 1 : -1;
-}
-
-void StepperDriver::tick()
-{
-    if (m_speedHz == 0U || !m_enabled) return;
-
-    uint32_t now = micros();
-    uint8_t emitted = 0;
-    while (static_cast<int32_t>(now - m_nextStepUs) >= 0 && emitted < 8U) {
-        doStep();
-        m_nextStepUs += m_intervalUs;
-        ++emitted;
-        now = micros();
+    if (!m_initialized || !m_enabled || m_speedHz == 0U) {
+        pwm_set_enabled(m_pwmSlice, false);
+        pwm_set_chan_level(m_pwmSlice, m_pwmChannel, 0U);
+        return;
     }
 
-    if (emitted == 8U && static_cast<int32_t>(now - m_nextStepUs) >= 0) {
-        m_nextStepUs = now + m_intervalUs;
-    }
-}
+    const uint32_t clockHz = clock_get_hz(clk_sys);
+    float divider = static_cast<float>(clockHz)
+                  / (static_cast<float>(m_speedHz) * 65'536.0f);
+    if (divider < 1.0f) divider = 1.0f;
+    if (divider > 255.0f) divider = 255.0f;
 
+    uint32_t periodCounts = static_cast<uint32_t>(
+        static_cast<float>(clockHz) / (divider * static_cast<float>(m_speedHz)) + 0.5f);
+    if (periodCounts < 2U) periodCounts = 2U;
+    if (periodCounts > 65'536U) periodCounts = 65'536U;
+
+    const uint16_t wrap = static_cast<uint16_t>(periodCounts - 1U);
+    pwm_set_enabled(m_pwmSlice, false);
+    pwm_set_clkdiv(m_pwmSlice, divider);
+    pwm_set_wrap(m_pwmSlice, wrap);
+    pwm_set_chan_level(m_pwmSlice, m_pwmChannel, periodCounts / 2U);
+    pwm_set_counter(m_pwmSlice, 0U);
+    pwm_set_enabled(m_pwmSlice, true);
+}
 
 } // namespace growbed::devices

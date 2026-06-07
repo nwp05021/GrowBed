@@ -13,6 +13,7 @@ namespace growbed::storage
         static constexpr const char* kKeySession   = "session";
         static constexpr const char* kKeyBootCount = "boot_cnt";
         static constexpr const char* kKeyRtState   = "rt_state";
+        static constexpr const char* kKeyRtcEpoch  = "rtc_epoch";
 
         bool init();
 

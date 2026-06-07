@@ -125,6 +125,9 @@ void UiController::handleDelta(int delta)
         case UiScreen::Preset:
             presetDelta(step);
             break;
+        case UiScreen::RtcSetup:
+            rtcSetupDelta(step);
+            break;
         case UiScreen::Manual:
             page2Delta(step);
             break;
@@ -153,6 +156,9 @@ void UiController::handleClick()
             break;
         case UiScreen::Preset:
             presetClick();
+            break;
+        case UiScreen::RtcSetup:
+            rtcSetupClick();
             break;
         case UiScreen::Manual:
             page2Click();
@@ -206,6 +212,13 @@ void UiController::enterMenuItem()
         case UiScreen::Preset:
             m_model.presetConfirm = false;
             m_model.confirmCursor = 1;
+            m_model.screen = target;
+            break;
+        case UiScreen::RtcSetup:
+            initRtcFields();
+            m_model.rtcSaveSucceeded = false;
+            m_model.fieldCursor = 0;
+            m_model.editMode = false;
             m_model.screen = target;
             break;
         case UiScreen::Manual:
@@ -296,10 +309,10 @@ void UiController::startDateClick()
 
     if (m_ctrl.applyCommand(app::Cmd::StartSession, &sess, sizeof(sess))) {
         m_model.sessionStartEpoch = sess.startEpoch;
-        std::snprintf(m_model.actionMessage, sizeof(m_model.actionMessage), "?ùÏû• ?úÏûë");
+        std::snprintf(m_model.actionMessage, sizeof(m_model.actionMessage), "Grow started");
         goMenu();
     } else {
-        std::snprintf(m_model.actionMessage, sizeof(m_model.actionMessage), "?úÏûë ?§Ìå®");
+        std::snprintf(m_model.actionMessage, sizeof(m_model.actionMessage), "Start failed");
     }
 }
 
@@ -331,9 +344,117 @@ void UiController::presetClick()
     goMenu();
 }
 
+void UiController::rtcSetupDelta(int d)
+{
+    if (!m_model.editMode) {
+        const int cursor = static_cast<int>(m_model.fieldCursor) + d;
+        m_model.fieldCursor = static_cast<uint8_t>(clampInt(cursor, 0, 7));
+        return;
+    }
+
+    switch (m_model.fieldCursor) {
+        case 0:
+            m_model.editRtcYear = static_cast<uint16_t>(
+                clampInt(static_cast<int>(m_model.editRtcYear) + d, 2020, 2099));
+            break;
+        case 1: {
+            int month = static_cast<int>(m_model.editRtcMonth) + d;
+            if (month < 1) month = 12;
+            if (month > 12) month = 1;
+            m_model.editRtcMonth = static_cast<uint8_t>(month);
+            break;
+        }
+        case 2:
+            m_model.editRtcDay = static_cast<uint8_t>(
+                clampInt(static_cast<int>(m_model.editRtcDay) + d, 1,
+                         maxDayForMonth(m_model.editRtcYear, m_model.editRtcMonth)));
+            break;
+        case 3: {
+            int hour = static_cast<int>(m_model.editRtcHour) + d;
+            if (hour < 0) hour = 23;
+            if (hour > 23) hour = 0;
+            m_model.editRtcHour = static_cast<uint8_t>(hour);
+            break;
+        }
+        case 4: {
+            int minute = static_cast<int>(m_model.editRtcMinute) + d;
+            if (minute < 0) minute = 59;
+            if (minute > 59) minute = 0;
+            m_model.editRtcMinute = static_cast<uint8_t>(minute);
+            break;
+        }
+        case 5: {
+            int second = static_cast<int>(m_model.editRtcSecond) + d;
+            if (second < 0) second = 59;
+            if (second > 59) second = 0;
+            m_model.editRtcSecond = static_cast<uint8_t>(second);
+            break;
+        }
+        default:
+            break;
+    }
+
+    m_model.editRtcDay = std::min<uint8_t>(
+        m_model.editRtcDay, maxDayForMonth(m_model.editRtcYear, m_model.editRtcMonth));
+}
+
+void UiController::rtcSetupClick()
+{
+    if (m_model.fieldCursor == 7U) {
+        goMenu();
+        return;
+    }
+
+    if (m_model.fieldCursor <= 5U) {
+        if (!m_model.editMode) {
+            m_model.actionMessage[0] = '\0';
+            m_model.rtcSaveSucceeded = false;
+        }
+        m_model.editMode = !m_model.editMode;
+        if (!m_model.editMode && m_model.fieldCursor < 5U) ++m_model.fieldCursor;
+        return;
+    }
+
+    std::tm tmv = {};
+    tmv.tm_year = static_cast<int>(m_model.editRtcYear) - 1900;
+    tmv.tm_mon = static_cast<int>(m_model.editRtcMonth) - 1;
+    tmv.tm_mday = static_cast<int>(m_model.editRtcDay);
+    tmv.tm_hour = static_cast<int>(m_model.editRtcHour);
+    tmv.tm_min = static_cast<int>(m_model.editRtcMinute);
+    tmv.tm_sec = static_cast<int>(m_model.editRtcSecond);
+    tmv.tm_isdst = -1;
+
+    const std::time_t time = std::mktime(&tmv);
+    if (time >= 0 && m_rtc.setEpoch(static_cast<uint32_t>(time))) {
+        m_model.rtcSaveSucceeded = true;
+        std::snprintf(m_model.actionMessage, sizeof(m_model.actionMessage), "RTC saved");
+        goMenu();
+    } else {
+        m_model.rtcSaveSucceeded = false;
+        std::snprintf(m_model.actionMessage, sizeof(m_model.actionMessage), "RTC save failed");
+    }
+}
+
+void UiController::initRtcFields()
+{
+    m_model.rtcAvailable = m_rtc.isAvailable();
+    const uint32_t epoch = m_rtc.isValid() ? m_rtc.nowEpoch() : 0U;
+    const std::time_t time = epoch != 0U ? static_cast<std::time_t>(epoch) : std::time(nullptr);
+    std::tm* tmv = std::localtime(&time);
+    if (!tmv || tmv->tm_year < 120) return;
+
+    m_model.editRtcYear = static_cast<uint16_t>(tmv->tm_year + 1900);
+    m_model.editRtcMonth = static_cast<uint8_t>(tmv->tm_mon + 1);
+    m_model.editRtcDay = static_cast<uint8_t>(tmv->tm_mday);
+    m_model.editRtcHour = static_cast<uint8_t>(tmv->tm_hour);
+    m_model.editRtcMinute = static_cast<uint8_t>(tmv->tm_min);
+    m_model.editRtcSecond = static_cast<uint8_t>(tmv->tm_sec);
+}
+
 void UiController::rebootClick()
 {
     if (m_model.confirmCursor == 1U) {
+        m_rtc.persist();
         m_ctrl.applyCommand(app::Cmd::Reboot);
     }
     goMenu();
@@ -362,7 +483,7 @@ void UiController::startSessionFromPreset(domain::PlantSpecies species)
     m_model.selectedSpecies = species;
     if (m_ctrl.applyCommand(app::Cmd::SelectPlant, &species, sizeof(species))) {
         std::snprintf(m_model.actionMessage, sizeof(m_model.actionMessage),
-                      "%s ?†ÌÉù", domain::plantName(species));
+                      "%s selected", domain::plantName(species));
     }
 }
 
